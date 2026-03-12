@@ -139,12 +139,10 @@ export async function GET(req: NextRequest) {
   const mode = getModeFromInterval(interval)
 
   try {
-    const klineBaseUrl =
-  market === "futures"
-    ? "https://fapi.binance.com/fapi/v1/klines"
-    : "https://api.binance.com/api/v3/klines"
+    const klineBaseUrl = "https://api.binance.com/api/v3/klines"
 
-const klineUrl = `${klineBaseUrl}?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=250`
+const klineUrl = 
+`${klineBaseUrl}?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=250`
 
 console.log("KLINE URL:", klineUrl)
 
