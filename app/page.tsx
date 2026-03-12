@@ -204,7 +204,7 @@ export default function HomePage() {
   const [indexScanner, setIndexScanner] = useState<any[]>([])
   const [usMarketBias, setUsMarketBias] = useState("Neutral")
   const [regimeData, setRegimeData] = useState<any>(null)
-
+const [analyzeError, setAnalyzeError] = useState("")
   const [alertFilter, setAlertFilter] = useState("all")
   const [loadingScan, setLoadingScan] = useState(false)
   const [loadingIndices, setLoadingIndices] = useState(false)
@@ -265,9 +265,11 @@ const [regime, setRegime] = useState<MarketRegime>("Neutral")
     customMarket?: string
   ) => {
     try {
-      const symbolToUse = customSymbol || symbol
-      const intervalToUse = customInterval || interval
-      const marketToUse = customMarket || marketType
+  setAnalyzeError("")
+
+  const symbolToUse = customSymbol || symbol
+  const intervalToUse = customInterval || interval
+  const marketToUse = customMarket || marketType
 
       const res = await fetch(
         `/api/analyze?symbol=${encodeURIComponent(symbolToUse)}&interval=${encodeURIComponent(intervalToUse)}&market=${encodeURIComponent(marketToUse)}`,
@@ -349,10 +351,10 @@ const [regime, setRegime] = useState<MarketRegime>("Neutral")
         setOiDeltaData(oiDeltaJson)
       }
     } catch (error) {
-      console.error("analyzeMarket Fehler:", error)
-      const [analyzeError, setAnalyzeError] = useState("")
-      setAnalyzeError("Analyse online ist im Moment nicht verfügbar.")
-    }
+  console.error("analyzeMarket Fehler:", error)
+  setResult(null)
+  setAnalyzeError("Analyse online ist im Moment nicht verfügbar.")
+}
   },
   [symbol, interval, marketType]
 )
