@@ -350,7 +350,8 @@ const [regime, setRegime] = useState<MarketRegime>("Neutral")
       }
     } catch (error) {
       console.error("analyzeMarket Fehler:", error)
-      alert("Analyse het en Fehler gmacht. Lueg i d Browser-Konsole.")
+      const [analyzeError, setAnalyzeError] = useState("")
+      setAnalyzeError("Analyse online ist im Moment nicht verfügbar.")
     }
   },
   [symbol, interval, marketType]
