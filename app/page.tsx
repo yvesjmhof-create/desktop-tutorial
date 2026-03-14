@@ -32,6 +32,7 @@ function getIntervalSeconds(value: string) {
   if (value === "1w") return 7 * 24 * 60 * 60
   return 60 * 60
 }
+
 function getOiDeltaSignal(data: any) {
   if (!data) return "Neutral"
 
@@ -45,6 +46,7 @@ function getOiDeltaSignal(data: any) {
 
   return "Neutral"
 }
+
 function getOiDeltaColor(signal: string) {
   if (signal === "Long Buildup") return "#22c55e"
   if (signal === "Short Buildup") return "#ef4444"
@@ -52,6 +54,7 @@ function getOiDeltaColor(signal: string) {
   if (signal === "Long Liquidation") return "#f97316"
   return "#6b7280"
 }
+
 type MarketRegime =
   | "Bullish Expansion"
   | "Bearish Expansion"
@@ -104,6 +107,7 @@ function buildEnhancedScore(params: {
   priceChangePct: number
   hasWhale: boolean
 }) {
+
   const { baseScore, oiChangePct, volumeRatio, priceChangePct, hasWhale } = params
 
   let bonus = 0
@@ -121,7 +125,124 @@ function buildEnhancedScore(params: {
 
   return clamp(Math.round(baseScore + bonus), 0, 100)
 }
+function getSetupQuality(score: number) {
+  if (score >= 90) return "A+"
+  if (score >= 80) return "A"
+  if (score >= 70) return "B"
+  if (score >= 55) return "Watchlist"
+  return "Skip"
+}
 
+function getTradeBiasFromSignal(params: {
+  trend?: string
+  signal?: string
+  oiStructure?: string
+  oiBias?: string
+  liquidationTrap?: string
+}) {
+  const trend = String(params.trend ?? "").toLowerCase()
+  const signal = String(params.signal ?? "").toLowerCase()
+  const oiStructure = String(params.oiStructure ?? "").toLowerCase()
+  const oiBias = String(params.oiBias ?? "").toLowerCase()
+  const liquidationTrap = String(params.liquidationTrap ?? "").toLowerCase()
+
+  if (
+    signal.includes("long") ||
+    trend.includes("bull") ||
+    oiBias.includes("bull") ||
+    oiStructure.includes("long")
+  ) {
+    if (!liquidationTrap.includes("long flush")) return "Long"
+  }
+
+  if (
+    signal.includes("short") ||
+    trend.includes("bear") ||
+    oiBias.includes("bear") ||
+    oiStructure.includes("short")
+  ) {
+    if (!liquidationTrap.includes("short squeeze")) return "Short"
+  }
+
+  return "Neutral"
+}
+
+function buildAutoTradeScore(coin: any) {
+  let score = 50
+
+  const trend = String(coin?.trend ?? "").toLowerCase()
+  const signal = String(coin?.signal ?? "").toLowerCase()
+  const macro = String(coin?.macroAlignment ?? "").toLowerCase()
+  const regime = String(coin?.regimeAlignment ?? "").toLowerCase()
+  const futures = String(coin?.futuresAlignment ?? "").toLowerCase()
+  const mtf = String(coin?.mtfStatus ?? coin?.mtfAlignment ?? "").toLowerCase()
+  const whale = String(coin?.whaleMove ?? "").toLowerCase()
+  const trap = String(coin?.liquidationTrap ?? "").toLowerCase()
+  const oiStructure = String(coin?.oiStructure ?? "").toLowerCase()
+  const oiBias = String(coin?.oiBias ?? "").toLowerCase()
+  const fundingMomentum = String(coin?.oiFundingMomentum ?? "").toLowerCase()
+
+  const rr = Number(coin?.rr ?? 0)
+  const oiDeltaPct = Number(coin?.oiDeltaPct ?? 0)
+  const baseScore = Number(coin?.score ?? 50)
+
+  score += Math.round((baseScore - 50) * 0.45)
+
+  if (trend.includes("bull")) score += 8
+  if (trend.includes("bear")) score += 8
+
+  if (signal.includes("long")) score += 8
+  if (signal.includes("short")) score += 8
+
+  if (macro.includes("aligned") || macro.includes("bull") || macro.includes("bear")) score += 6
+  if (regime.includes("aligned") || regime.includes("bull") || regime.includes("bear")) score += 6
+  if (futures.includes("aligned") || futures.includes("bull") || futures.includes("bear")) score += 6
+  if (mtf.includes("aligned") || mtf.includes("bull") || mtf.includes("bear")) score += 7
+
+  if (oiStructure.includes("trend confirmed")) score += 8
+  if (oiStructure.includes("long buildup")) score += 7
+  if (oiStructure.includes("short buildup")) score += 7
+  if (oiStructure.includes("short squeeze build")) score += 5
+
+  if (oiBias.includes("bull")) score += 5
+  if (oiBias.includes("bear")) score += 5
+
+  if (Math.abs(oiDeltaPct) >= 3) score += 4
+  if (Math.abs(oiDeltaPct) >= 6) score += 4
+
+  if (fundingMomentum.includes("bull")) score += 3
+  if (fundingMomentum.includes("bear")) score += 3
+
+  if (whale.includes("bull")) score += 6
+  if (whale.includes("bear")) score += 6
+
+  if (trap.includes("short squeeze")) score += 4
+  if (trap.includes("long flush")) score += 4
+
+  if (rr >= 1.5) score += 4
+  if (rr >= 2) score += 6
+  if (rr >= 3) score += 5
+
+  if (trap.includes("neutral") === false && signal.includes("neutral")) score -= 4
+  if (rr > 0 && rr < 1.2) score -= 8
+
+  score = clamp(score, 0, 100)
+
+  const quality = getSetupQuality(score)
+  const bias = getTradeBiasFromSignal({
+    trend: coin?.trend,
+    signal: coin?.signal,
+    oiStructure: coin?.oiStructure,
+    oiBias: coin?.oiBias,
+    liquidationTrap: coin?.liquidationTrap,
+  })
+
+  return {
+    autoScore: score,
+    autoQuality: quality,
+    autoBias: bias,
+  }
+}
 function calculateEMA(values: number[], period: number) {
   if (values.length < period) return []
 
@@ -129,7 +250,6 @@ function calculateEMA(values: number[], period: number) {
   const emaArray: number[] = []
 
   let ema = values.slice(0, period).reduce((sum, v) => sum + v, 0) / period
-
   emaArray.push(ema)
 
   for (let i = period; i < values.length; i++) {
@@ -167,7 +287,9 @@ function normalizeAnalysisResult(data: any, market: string) {
     ...data,
     market: data.market ?? market,
     data: normalizedData,
-    lastPrice: Number(data.lastPrice ?? normalizedData[normalizedData.length - 1]?.close ?? 0),
+    lastPrice: Number(
+      data.lastPrice ?? normalizedData[normalizedData.length - 1]?.close ?? 0
+    ),
   }
 }
 
@@ -204,7 +326,7 @@ export default function HomePage() {
   const [indexScanner, setIndexScanner] = useState<any[]>([])
   const [usMarketBias, setUsMarketBias] = useState("Neutral")
   const [regimeData, setRegimeData] = useState<any>(null)
-const [analyzeError, setAnalyzeError] = useState("")
+  const [analyzeError, setAnalyzeError] = useState("")
   const [alertFilter, setAlertFilter] = useState("all")
   const [loadingScan, setLoadingScan] = useState(false)
   const [loadingIndices, setLoadingIndices] = useState(false)
@@ -225,17 +347,19 @@ const [analyzeError, setAnalyzeError] = useState("")
   const previousScannerRef = useRef<any[]>([])
 
   const chartContainerRef = useRef<HTMLDivElement | null>(null)
-  const chartInstanceRef = useRef<any>(null)
-  const candleSeriesRef = useRef<any>(null)
-  const ema20SeriesRef = useRef<any>(null)
-  const ema50SeriesRef = useRef<any>(null)
-  const visibleRangeRef = useRef<any>(null)
-  const chartInitializedRef = useRef(false)
+const chartInstanceRef = useRef<any>(null)
+const candleSeriesRef = useRef<any>(null)
+const ema20SeriesRef = useRef<any>(null)
+const ema50SeriesRef = useRef<any>(null)
+const visibleRangeRef = useRef<any>(null)
+const chartInitializedRef = useRef(false)
+const isApplyingChartRangeRef = useRef(false)
+const resizeObserverRef = useRef<ResizeObserver | null>(null)
 const [regime, setRegime] = useState<MarketRegime>("Neutral")
-  const setupLinesRef = useRef<any[]>([])
-  const liquidationLinesRef = useRef<any[]>([])
-  const liveLineRef = useRef<any>(null)
-  const shouldAutoFitOnNextDataRef = useRef(true)
+const setupLinesRef = useRef<any[]>([])
+const liquidationLinesRef = useRef<any[]>([])
+const liveLineRef = useRef<any>(null)
+const shouldAutoFitOnNextDataRef = useRef(true)
 
   const [assetTab, setAssetTab] = useState("Alle")
   const assetTabs = [
@@ -259,132 +383,227 @@ const [regime, setRegime] = useState<MarketRegime>("Neutral")
   }
 
   const analyzeMarket = useCallback(
-  async (
-    customSymbol?: string,
-    customInterval?: string,
-    customMarket?: string
-  ) => {
-    try {
-  setAnalyzeError("")
+    async (
+      customSymbol?: string,
+      customInterval?: string,
+      customMarket?: string
+    ) => {
+      try {
+        setAnalyzeError("")
 
-  const symbolToUse = customSymbol || symbol
-  const intervalToUse = customInterval || interval
-  const marketToUse = customMarket || marketType
+        const rawSymbol = (customSymbol || symbol).trim().toUpperCase()
+const intervalToUse = customInterval || interval
+const marketToUse = customMarket || marketType
 
-      const res = await fetch(
-        `/api/analyze?symbol=${encodeURIComponent(symbolToUse)}&interval=${encodeURIComponent(intervalToUse)}&market=${encodeURIComponent(marketToUse)}`,
-        { cache: "no-store" }
-      )
+if (!/^[A-Z0-9]{6,20}$/.test(rawSymbol)) {
+  setAnalyzeError("Ungültigs Binance-Symbol. Bitte z.B. BTCUSDT, ETHUSDT oder SOLUSDT verwände.")
+  return
+}
 
-      if (!res.ok) {
-        const errorText = await res.text()
-        console.error("API /api/analyze Fehler:", res.status, errorText)
-        alert(`Analyse Fehler: ${res.status} - ${errorText}`)
-        return
-      }
+const symbolToUse = rawSymbol
 
-      const data = await res.json()
-      console.log("ANALYZE RESPONSE:", data)
+        const res = await fetch(
+          `/api/analyze?symbol=${encodeURIComponent(
+            symbolToUse
+          )}&interval=${encodeURIComponent(
+            intervalToUse
+          )}&market=${encodeURIComponent(marketToUse)}`,
+          { cache: "no-store" }
+        )
 
-      setSymbol(symbolToUse)
-      setInterval(intervalToUse)
-      setMarketType(marketToUse)
+        if (!res.ok) {
+  const errorText = await res.text()
+  console.error("API /api/analyze Fehler:", res.status, errorText)
+  setAnalyzeError(`Analyse Fehler: ${res.status}`)
+  return
+}
 
-      setResult({
-        ...data,
-        symbol: data?.symbol ?? symbolToUse,
-        interval: data?.interval ?? intervalToUse,
-        market: data?.market ?? marketToUse,
-        data: Array.isArray(data?.data) ? data.data : [],
-        lastPrice: Number(data?.lastPrice ?? 0),
-      })
+        const data = await res.json()
+       const rankedCoins = (data.coins || []).map((coin: any) => {
+  const auto = buildAutoTradeScore(coin)
+  return {
+    ...coin,
+    ...auto,
+  }
+})
+        const normalized = normalizeAnalysisResult(data, marketToUse)
 
-      setLivePrice(
-        Number(data?.lastPrice ?? data?.data?.[data?.data?.length - 1]?.close ?? 0)
-      )
+        setSymbol(symbolToUse)
+        setInterval(intervalToUse)
+        setMarketType(marketToUse)
 
-      setLastUpdated(new Date().toLocaleString())
-      visibleRangeRef.current = null
-      shouldAutoFitOnNextDataRef.current = true
+        setLivePrice(null)
+        setLivePriceChange(null)
+        setLiveStatus("Connecting...")
 
-      const futuresRes = await fetch(`/api/futures?symbol=${encodeURIComponent(symbolToUse)}`, {
-        cache: "no-store",
-      })
-      if (futuresRes.ok) {
-        const futuresJson = await futuresRes.json()
-        setFuturesData(futuresJson)
-      }
+        setResult({
+          ...normalized,
+          symbol: normalized?.symbol ?? symbolToUse,
+          interval: normalized?.interval ?? intervalToUse,
+          market: normalized?.market ?? marketToUse,
+        })
 
-      const futuresIntelRes = await fetch(
-        `/api/futures-intel?symbol=${encodeURIComponent(symbolToUse)}`,
-        { cache: "no-store" }
-      )
-      if (futuresIntelRes.ok) {
-        const futuresIntelJson = await futuresIntelRes.json()
-        setFuturesIntel(futuresIntelJson)
-      }
+        setLivePrice(
+          Number(
+            normalized?.lastPrice ??
+              normalized?.data?.[normalized?.data?.length - 1]?.close ??
+              0
+          )
+        )
 
-      const liquidationRes = await fetch(
-        `/api/liquidations?symbol=${encodeURIComponent(symbolToUse)}`,
-        { cache: "no-store" }
-      )
-      if (liquidationRes.ok) {
-        const liquidationJson = await liquidationRes.json()
-        setLiquidationData(liquidationJson)
-      }
+        setLastUpdated(new Date().toLocaleString())
+        visibleRangeRef.current = null
+        shouldAutoFitOnNextDataRef.current = true
 
-      const mtfRes = await fetch(
-        `/api/mtf?symbol=${encodeURIComponent(symbolToUse)}&market=${encodeURIComponent(marketToUse)}`,
-        { cache: "no-store" }
-      )
-      if (mtfRes.ok) {
-        const mtfJson = await mtfRes.json()
-        setMtfData(mtfJson)
-      }
+        const futuresRes = await fetch(
+          `/api/futures?symbol=${encodeURIComponent(symbolToUse)}`,
+          {
+            cache: "no-store",
+          }
+        )
+        if (futuresRes.ok) {
+          const futuresJson = await futuresRes.json()
+          setFuturesData(futuresJson)
+        }
 
-      const oiDeltaRes = await fetch(
-        `/api/oi-delta?symbol=${encodeURIComponent(symbolToUse)}`,
-        { cache: "no-store" }
-      )
-      if (oiDeltaRes.ok) {
-        const oiDeltaJson = await oiDeltaRes.json()
-        setOiDeltaData(oiDeltaJson)
-      }
-    } catch (error) {
+        const futuresIntelRes = await fetch(
+          `/api/futures-intel?symbol=${encodeURIComponent(symbolToUse)}`,
+          { cache: "no-store" }
+        )
+        if (futuresIntelRes.ok) {
+          const futuresIntelJson = await futuresIntelRes.json()
+          setFuturesIntel(futuresIntelJson)
+        }
+
+        const liquidationRes = await fetch(
+          `/api/liquidations?symbol=${encodeURIComponent(symbolToUse)}`,
+          { cache: "no-store" }
+        )
+        if (liquidationRes.ok) {
+          const liquidationJson = await liquidationRes.json()
+          setLiquidationData(liquidationJson)
+        }
+
+        const mtfRes = await fetch(
+          `/api/mtf?symbol=${encodeURIComponent(
+            symbolToUse
+          )}&market=${encodeURIComponent(marketToUse)}`,
+          { cache: "no-store" }
+        )
+        if (mtfRes.ok) {
+          const mtfJson = await mtfRes.json()
+          setMtfData(mtfJson)
+        }
+
+        const oiDeltaRes = await fetch(
+          `/api/oi-delta?symbol=${encodeURIComponent(symbolToUse)}`,
+          { cache: "no-store" }
+        )
+        if (oiDeltaRes.ok) {
+          const oiDeltaJson = await oiDeltaRes.json()
+          setOiDeltaData(oiDeltaJson)
+        }
+      } catch (error) {
   console.error("analyzeMarket Fehler:", error)
   setResult(null)
   setAnalyzeError("Analyse online ist im Moment nicht verfügbar.")
 }
-  },
-  [symbol, interval, marketType]
-)
-useEffect(() => {
-  function calculateRegime() {
-    if (!result) return
+    },
+    [symbol, interval, marketType]
+  )
+const syncChartData = useCallback((data: any[]) => {
+  if (!chartInstanceRef.current) return
+  if (!candleSeriesRef.current) return
+  if (!ema20SeriesRef.current) return
+  if (!ema50SeriesRef.current) return
+  if (!Array.isArray(data) || data.length === 0) return
 
-    const funding = Number(result.fundingRate)
-    const oi = Number(result.openInterest)
+  const timeScale = chartInstanceRef.current.timeScale()
+  const previousRange = visibleRangeRef.current
 
-    if (funding > 0.01 && oi > 0) {
-      setRegime("Bullish Expansion")
-      return
-    }
+  const candles = data.map((c: any) => ({
+    time: Number(c.time),
+    open: Number(c.open),
+    high: Number(c.high),
+    low: Number(c.low),
+    close: Number(c.close),
+  }))
 
-    if (funding < -0.01 && oi > 0) {
-      setRegime("Bearish Expansion")
-      return
-    }
+  candleSeriesRef.current.setData(candles)
 
-    if (Math.abs(funding) < 0.005) {
-      setRegime("Range")
-      return
-    }
+  const closes = data.map((c: any) => Number(c.close))
+  const ema20 = calculateEMA(closes, 20)
+  const ema50 = calculateEMA(closes, 50)
 
-    setRegime("Volatile")
+  if (ema20.length > 0) {
+    ema20SeriesRef.current.setData(
+      data.slice(19).map((c: any, i: number) => ({
+        time: Number(c.time),
+        value: Number(ema20[i]),
+      }))
+    )
+  } else {
+    ema20SeriesRef.current.setData([])
   }
 
-  calculateRegime()
-}, [result])
+  if (ema50.length > 0) {
+    ema50SeriesRef.current.setData(
+      data.slice(49).map((c: any, i: number) => ({
+        time: Number(c.time),
+        value: Number(ema50[i]),
+      }))
+    )
+  } else {
+    ema50SeriesRef.current.setData([])
+  }
+
+  requestAnimationFrame(() => {
+    if (!chartInstanceRef.current) return
+
+    isApplyingChartRangeRef.current = true
+
+    try {
+      if (previousRange && !shouldAutoFitOnNextDataRef.current) {
+        timeScale.setVisibleLogicalRange(previousRange)
+      } else if (shouldAutoFitOnNextDataRef.current) {
+        timeScale.fitContent()
+        shouldAutoFitOnNextDataRef.current = false
+      }
+    } finally {
+      requestAnimationFrame(() => {
+        isApplyingChartRangeRef.current = false
+      })
+    }
+  })
+}, [])
+  useEffect(() => {
+    function calculateRegime() {
+      if (!result) return
+
+      const funding = Number(result.fundingRate)
+      const oi = Number(result.openInterest)
+
+      if (funding > 0.01 && oi > 0) {
+        setRegime("Bullish Expansion")
+        return
+      }
+
+      if (funding < -0.01 && oi > 0) {
+        setRegime("Bearish Expansion")
+        return
+      }
+
+      if (Math.abs(funding) < 0.005) {
+        setRegime("Range")
+        return
+      }
+
+      setRegime("Volatile")
+    }
+
+    calculateRegime()
+  }, [result])
+
   async function scanMarket() {
     try {
       setLoadingScan(true)
@@ -405,16 +624,40 @@ useEffect(() => {
       }
 
       const data = await res.json()
+     const rankedCoins = (data.coins || []).map((coin: any) => {
+  const auto = buildAutoTradeScore(coin)
+  return {
+    ...coin,
+    ...auto,
+  }
+})
 
-      setScanner(data.coins || [])
-      setTopLongs(data.topLongs || [])
-      setTopShorts(data.topShorts || [])
-      setBestOverall(data.bestOverall || null)
-      setBestLong(data.bestLong || null)
-      setBestShort(data.bestShort || null)
-      setHighQualitySetups(data.highQualitySetups || [])
-      setUsMarketBias(data.usMarketBias || "Neutral")
-      setRegimeData(data.regime || null)
+setScanner(rankedCoins)
+
+setTopLongs(
+  [...(data.topLongs || [])]
+    .map((coin: any) => ({ ...coin, ...buildAutoTradeScore(coin) }))
+    .sort((a: any, b: any) => b.autoScore - a.autoScore)
+)
+
+setTopShorts(
+  [...(data.topShorts || [])]
+    .map((coin: any) => ({ ...coin, ...buildAutoTradeScore(coin) }))
+    .sort((a: any, b: any) => b.autoScore - a.autoScore)
+)
+
+setBestOverall(data.bestOverall || null)
+setBestLong(data.bestLong || null)
+setBestShort(data.bestShort || null)
+
+setHighQualitySetups(
+  rankedCoins.filter(
+    (coin: any) => coin.autoQuality === "A+" || coin.autoQuality === "A"
+  )
+)
+
+setUsMarketBias(data.usMarketBias || "Neutral")
+setRegimeData(data.regime || null)
     } catch (error) {
       console.error("scanMarket Fehler:", error)
       alert("Scanner het en Fehler gmacht. Lueg i d Browser-Konsole.")
@@ -501,22 +744,24 @@ useEffect(() => {
   const timeScale = chart.timeScale()
 
   const saveRange = () => {
+    if (isApplyingChartRangeRef.current) return
     visibleRangeRef.current = timeScale.getVisibleLogicalRange()
   }
 
   timeScale.subscribeVisibleLogicalRangeChange(saveRange)
 
-  const handleResize = () => {
+  resizeObserverRef.current = new ResizeObserver(() => {
     if (!chartContainerRef.current || !chartInstanceRef.current) return
     chartInstanceRef.current.applyOptions({
       width: chartContainerRef.current.clientWidth,
     })
-  }
+  })
 
-  window.addEventListener("resize", handleResize)
+  resizeObserverRef.current.observe(chartContainerRef.current)
 
   return () => {
-    window.removeEventListener("resize", handleResize)
+    resizeObserverRef.current?.disconnect()
+    resizeObserverRef.current = null
     timeScale.unsubscribeVisibleLogicalRangeChange(saveRange)
     chart.remove()
     chartInstanceRef.current = null
@@ -528,6 +773,7 @@ useEffect(() => {
     liveLineRef.current = null
     visibleRangeRef.current = null
     chartInitializedRef.current = false
+    isApplyingChartRangeRef.current = false
   }
 }, [])
 useEffect(() => {
@@ -587,64 +833,6 @@ useEffect(() => {
     }
   })
 }, [result])
-  useEffect(() => {
-    if (!candleSeriesRef.current || !ema20SeriesRef.current || !ema50SeriesRef.current) return
-    if (!result?.data || !Array.isArray(result.data)) return
-
-    const candles = result.data || []
-    if (!candles.length) return
-
-    const previousRange = visibleRangeRef.current
-
-    candleSeriesRef.current.setData(
-      candles.map((c: any) => ({
-        time: normalizeCandleTime(c.time),
-        open: Number(c.open),
-        high: Number(c.high),
-        low: Number(c.low),
-        close: Number(c.close),
-      }))
-    )
-
-    const closes = candles.map((c: any) => Number(c.close))
-    const ema20 = calculateEMA(closes, 20)
-    const ema50 = calculateEMA(closes, 50)
-
-    if (ema20.length > 0) {
-      ema20SeriesRef.current.setData(
-        candles.slice(19).map((c: any, i: number) => ({
-          time: normalizeCandleTime(c.time),
-          value: ema20[i],
-        }))
-      )
-    } else {
-      ema20SeriesRef.current.setData([])
-    }
-
-    if (ema50.length > 0) {
-      ema50SeriesRef.current.setData(
-        candles.slice(49).map((c: any, i: number) => ({
-          time: normalizeCandleTime(c.time),
-          value: ema50[i],
-        }))
-      )
-    } else {
-      ema50SeriesRef.current.setData([])
-    }
-
-    requestAnimationFrame(() => {
-      const timeScale = chartInstanceRef.current?.timeScale()
-      if (!timeScale) return
-
-      if (previousRange) {
-        timeScale.setVisibleLogicalRange(previousRange)
-      } else if (shouldAutoFitOnNextDataRef.current) {
-        timeScale.fitContent()
-        shouldAutoFitOnNextDataRef.current = false
-      }
-    })
-  }, [result])
-
   useEffect(() => {
     if (!candleSeriesRef.current) return
 
@@ -784,63 +972,7 @@ useEffect(() => {
       title: "Live",
     })
   }, [livePrice, result?.lastPrice])
-useEffect(() => {
-  if (!chartInstanceRef.current) return
-  if (!candleSeriesRef.current) return
-  if (!ema20SeriesRef.current) return
-  if (!ema50SeriesRef.current) return
-  if (!result?.data || !Array.isArray(result.data) || result.data.length === 0) return
 
-  const previousRange = visibleRangeRef.current
-
-  const candles = result.data.map((c: any) => ({
-    time: Number(c.time),
-    open: Number(c.open),
-    high: Number(c.high),
-    low: Number(c.low),
-    close: Number(c.close),
-  }))
-
-  candleSeriesRef.current.setData(candles)
-
-  const closes = result.data.map((c: any) => Number(c.close))
-  const ema20 = calculateEMA(closes, 20)
-  const ema50 = calculateEMA(closes, 50)
-
-  if (ema20.length > 0) {
-    ema20SeriesRef.current.setData(
-      result.data.slice(19).map((c: any, i: number) => ({
-        time: Number(c.time),
-        value: Number(ema20[i]),
-      }))
-    )
-  } else {
-    ema20SeriesRef.current.setData([])
-  }
-
-  if (ema50.length > 0) {
-    ema50SeriesRef.current.setData(
-      result.data.slice(49).map((c: any, i: number) => ({
-        time: Number(c.time),
-        value: Number(ema50[i]),
-      }))
-    )
-  } else {
-    ema50SeriesRef.current.setData([])
-  }
-
-  requestAnimationFrame(() => {
-    const timeScale = chartInstanceRef.current?.timeScale()
-    if (!timeScale) return
-
-    if (previousRange) {
-      timeScale.setVisibleLogicalRange(previousRange)
-    } else if (shouldAutoFitOnNextDataRef.current) {
-      timeScale.fitContent()
-      shouldAutoFitOnNextDataRef.current = false
-    }
-  })
-}, [result])
   useEffect(() => {
     const timer = window.setInterval(() => {
       const now = new Date()
@@ -858,104 +990,157 @@ useEffect(() => {
 
     return () => window.clearInterval(timer)
   }, [interval])
+const activeStreamSymbol = useMemo(() => {
+  const fromResult = String(result?.symbol ?? "").trim().toUpperCase()
+  const fromState = String(symbol ?? "").trim().toUpperCase()
 
+  if (fromResult && /^[A-Z0-9]{6,20}$/.test(fromResult)) {
+    return fromResult
+  }
+
+  if (fromState && /^[A-Z0-9]{6,20}$/.test(fromState)) {
+    return fromState
+  }
+
+  return ""
+}, [result?.symbol, symbol])
   useEffect(() => {
-    if (!result?.symbol || !result?.interval) return
+  if (!activeStreamSymbol || activeStreamSymbol.length < 6 || !interval) return
 
-    const wsSymbol = String(result.symbol).toLowerCase()
-    const wsInterval = result.interval
-    const streamName = `${wsSymbol}@kline_${wsInterval}`
+  const wsSymbol = activeStreamSymbol.toLowerCase()
+  const wsInterval = interval.toLowerCase()
+  const streamName = `${wsSymbol}@kline_${wsInterval}`
 
-    const wsUrl =
-      marketType === "futures"
-        ? `wss://fstream.binance.com/ws/${streamName}`
-        : `wss://stream.binance.com:9443/ws/${streamName}`
+  const wsUrl =
+    marketType === "futures"
+      ? `wss://fstream.binance.com/ws/${streamName}`
+      : `wss://stream.binance.com:9443/ws/${streamName}`
 
-    let socket: WebSocket | null = null
+  console.log("CONNECTING WS:", {
+    symbol: activeStreamSymbol,
+    interval,
+    marketType,
+    wsUrl,
+  })
 
-    try {
-      socket = new WebSocket(wsUrl)
-      setLiveStatus("Connecting...")
+  let socket: WebSocket | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let isUnmounted = false
 
-      socket.onopen = () => {
+  const connect = () => {
+    if (isUnmounted) return
+
+    setLiveStatus("Connecting...")
+
+    socket = new WebSocket(wsUrl)
+
+    socket.onopen = () => {
+      console.log("WS OPEN:", wsUrl)
+      setLiveStatus("Live")
+    }
+
+    socket.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        const kline = msg?.k
+        
+          if (!kline) {
+          console.log("WS MESSAGE WITHOUT KLINE:", msg)
+          return
+        }
+
+        const nextClose = Number(kline.c)
+        const nextOpen = Number(kline.o)
+        const candleTime = Math.floor(Number(kline.t) / 1000)
+
+        console.log("WS KLINE:", {
+          close: nextClose,
+          open: nextOpen,
+          candleTime,
+          isClosed: kline.x,
+        })
+
         setLiveStatus("Live")
-      }
+        setLivePrice(nextClose)
 
-      socket.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          const kline = msg.k
+        if (!Number.isNaN(nextClose) && !Number.isNaN(nextOpen) && nextOpen !== 0) {
+          const changePct = ((nextClose - nextOpen) / nextOpen) * 100
+          setLivePriceChange(Number(changePct.toFixed(2)))
+        }
 
-          if (!kline) return
+        setResult((prev: any) => {
+          if (!prev || !Array.isArray(prev.data)) return prev
 
-          const nextClose = Number(kline.c)
-          const nextOpen = Number(kline.o)
-
-          setLivePrice(nextClose)
-
-          if (!Number.isNaN(nextClose) && !Number.isNaN(nextOpen) && nextOpen !== 0) {
-            const changePct = ((nextClose - nextOpen) / nextOpen) * 100
-            setLivePriceChange(Number(changePct.toFixed(2)))
+          const newCandle = {
+            time: candleTime,
+            open: Number(kline.o),
+            high: Number(kline.h),
+            low: Number(kline.l),
+            close: Number(kline.c),
+            volume: Number(kline.v ?? 0),
           }
 
-          setResult((prev: any) => {
-            if (!prev?.data || !Array.isArray(prev.data)) return prev
+          const prevData = [...prev.data]
+          const last = prevData[prevData.length - 1]
 
-            const candleTime = normalizeCandleTime(kline.t)
+          let nextData = prevData
 
-            const updatedCandle = {
-              time: candleTime,
-              open: Number(kline.o),
-              high: Number(kline.h),
-              low: Number(kline.l),
-              close: Number(kline.c),
-              volume: Number(kline.v),
+          if (last && Number(last.time) === Number(newCandle.time)) {
+            nextData = [...prevData.slice(0, -1), newCandle]
+          } else {
+            nextData = [...prevData, newCandle]
+            if (nextData.length > 250) {
+              nextData.shift()
             }
+          }
 
-            const nextData = [...prev.data]
-            const lastIndex = nextData.length - 1
-            const lastCandle = nextData[lastIndex]
-            const lastTime = lastCandle ? normalizeCandleTime(lastCandle.time) : 0
-
-            if (lastCandle && lastTime === candleTime) {
-              nextData[lastIndex] = updatedCandle
-            } else if (!lastCandle || candleTime > lastTime) {
-              nextData.push(updatedCandle)
-
-              if (nextData.length > 250) {
-                nextData.shift()
-              }
-            }
-
-            return {
-              ...prev,
-              lastPrice: Number(kline.c),
-              data: nextData,
-            }
-          })
-        } catch (err) {
-          console.error("WebSocket parse error:", err)
-        }
+          return {
+            ...prev,
+            lastPrice: Number(kline.c),
+            data: nextData,
+          }
+        })
+      } catch (err) {
+        console.error("WS PARSE ERROR:", err)
       }
+    }
 
-      socket.onerror = () => {
-        setLiveStatus("Error")
-      }
-
-      socket.onclose = () => {
-        setLiveStatus("Disconnected")
-      }
-    } catch (err) {
-      console.error("WebSocket init error:", err)
+    socket.onerror = (err) => {
+      console.error("WS ERROR:", err)
       setLiveStatus("Error")
     }
 
-    return () => {
-      if (socket) {
-        socket.close()
-      }
+    socket.onclose = (event) => {
+      if (isUnmounted) return
+
+      console.error("WS CLOSED:", {
+        code: event.code,
+        reason: event.reason,
+        wasClean: event.wasClean,
+      })
+
+      setLiveStatus("Disconnected")
+
+      reconnectTimer = setTimeout(() => {
+        connect()
+      }, 3000)
     }
-  }, [result?.symbol, result?.interval, marketType])
+  }
+
+  connect()
+
+  return () => {
+    isUnmounted = true
+
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+    }
+
+    if (socket) {
+      socket.close()
+    }
+  }
+}, [activeStreamSymbol, interval, marketType])
 
   useEffect(() => {
     if (!autoRefresh) return
@@ -982,18 +1167,13 @@ useEffect(() => {
   useEffect(() => {
     const timer = window.setInterval(async () => {
       try {
-        const res = await fetch("/api/regime", {
+        const res = await fetch(`${window.location.origin}/api/regime`, {
           cache: "no-store",
         })
 
         if (!res.ok) return
 
         const data = await res.json()
-
-console.log("ANALYSE RESULT:", data)
-console.log("CANDLES:", data?.data?.length)
-
-setResult(data)
         setRegimeData(data)
       } catch (error) {
         console.error("Regime refresh error:", error)
@@ -1214,17 +1394,17 @@ setResult(data)
 
   const liveClose = Number(latestCandle?.close ?? result?.lastPrice ?? livePrice ?? 0)
 
-const previousClose = Number(
-  previousCandle?.close ??
-    (Array.isArray(result?.data) && result.data.length > 1
-      ? result.data[result.data.length - 2]?.close
-      : liveClose)
-)
+  const previousClose = Number(
+    previousCandle?.close ??
+      (Array.isArray(result?.data) && result.data.length > 1
+        ? result.data[result.data.length - 2]?.close
+        : liveClose)
+  )
 
-const priceChangePct =
-  previousClose > 0 && liveClose > 0
-    ? ((liveClose - previousClose) / previousClose) * 100
-    : 0
+  const priceChangePct =
+    previousClose > 0 && liveClose > 0
+      ? ((liveClose - previousClose) / previousClose) * 100
+      : 0
 
   const currentVolume = Number(latestCandle?.volume ?? result?.volume24h ?? 0)
 
@@ -1300,7 +1480,13 @@ const priceChangePct =
       : "Neutral"
 
   const confidence =
-    enhancedScore >= 90 ? "Very High" : enhancedScore >= 80 ? "High" : enhancedScore >= 65 ? "Medium" : "Low"
+    enhancedScore >= 90
+      ? "Very High"
+      : enhancedScore >= 80
+      ? "High"
+      : enhancedScore >= 65
+      ? "Medium"
+      : "Low"
 
   const liquiditySweep: LiquiditySweep = useMemo(() => {
     if (!latestCandle || !previousCandle) {
@@ -1342,9 +1528,11 @@ const priceChangePct =
     }
   }, [latestCandle, previousCandle])
 
-useEffect(() => {
-  analyzeMarket("BTCUSDT", interval, marketType)
-}, [])
+  useEffect(() => {
+    analyzeMarket(symbol, interval, marketType)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     const nextAlerts: SmartAlert[] = []
 
@@ -1479,1443 +1667,1662 @@ useEffect(() => {
   }, [accountSize, riskPercent, result])
 
   return (
-  <main
-    style={{
-      padding: 24,
-      maxWidth: 1280,
-      margin: "0 auto",
-      fontFamily: "Arial, sans-serif",
-      color: "white",
-      background: "black",
-      minHeight: "100vh",
-    }}
-  >
-    <h1>Market Radar</h1>
-    <p>Scanner für Spot und Futures mit Macro, Regime, MTF, Funding, OI, Whale und Liquidation Bias</p>
-<div
-  style={{
-    marginTop: 20,
-    padding: 20,
-    border: "1px solid #333",
-    borderRadius: 10,
-    background: "#111"
-  }}
->
-  <h2>Market Regime</h2>
-
-  <div
-    style={{
-      fontSize: 24,
-      fontWeight: "bold",
-      color:
-        regime === "Bullish Expansion"
-          ? "#22c55e"
-          : regime === "Bearish Expansion"
-          ? "#ef4444"
-          : regime === "Range"
-          ? "#eab308"
-          : regime === "Volatile"
-          ? "#f97316"
-          : "#6b7280"
-    }}
-  >
-    {regime}
-  </div>
-  <div
-  style={{
-    marginTop: 20,
-    padding: 20,
-    border: "1px solid #333",
-    borderRadius: 10,
-    background: "#111",
-  }}
->
-  <h2>OI Delta Radar</h2>
-
-  <div
-    style={{
-      fontSize: 24,
-      fontWeight: "bold",
-      color: getOiDeltaColor(oiDeltaSignal),
-      marginBottom: 10,
-    }}
-  >
-    {oiDeltaSignal}
-  </div>
-
-  <div style={{ color: "#aaa", fontSize: 14 }}>
-    OI Delta: {Number(oiDeltaData?.oiDelta ?? 0).toFixed(2)}
-  </div>
-
-  <div style={{ color: "#aaa", fontSize: 14, marginTop: 6 }}>
-    Price Change: {Number(oiDeltaData?.priceChange ?? 0).toFixed(2)}%
-  </div>
-</div>
-</div>
-    <div
+    <main
       style={{
-        display: "flex",
-        gap: 10,
-        overflowX: "auto",
-        padding: "10px 0",
-        marginTop: 10,
+        padding: 24,
+        maxWidth: 1280,
+        margin: "0 auto",
+        fontFamily: "Arial, sans-serif",
+        color: "white",
+        background: "black",
+        minHeight: "100vh",
       }}
     >
-      {assetTabs.map((tab) => {
-        const active = assetTab === tab
+      <h1>Market Radar</h1>
+      <p>
+        Scanner für Spot und Futures mit Macro, Regime, MTF, Funding, OI, Whale
+        und Liquidation Bias
+      </p>
 
-        return (
-          <button
-            key={tab}
-            onClick={() => setAssetTab(tab)}
-            style={{
-              padding: "10px 16px",
-              borderRadius: 999,
-              border: "1px solid #333",
-              background: active ? "white" : "#1a1a1a",
-              color: active ? "black" : "white",
-              fontWeight: 600,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {tab}
-          </button>
-        )
-      })}
-    </div>
-
-    <div
-      style={{
-        display: "grid",
-        gap: 12,
-        maxWidth: 460,
-        marginTop: 20,
-      }}
-    >
-      <input
-        value={symbol}
-        onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-        placeholder="BTCUSDT"
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "1px solid #555",
-          background: "black",
-          color: "white",
-        }}
-      />
-
-      <select
-        value={interval}
-        onChange={(e) => setInterval(e.target.value)}
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "1px solid #555",
-          background: "black",
-          color: "white",
-        }}
-      >
-        <option value="15m">Scalp</option>
-        <option value="1h">Daytrading</option>
-        <option value="4h">Swing</option>
-        <option value="1d">Position</option>
-        <option value="1w">Macro</option>
-      </select>
-
-      <select
-        value={marketType}
-        onChange={(e) => setMarketType(e.target.value)}
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "1px solid #555",
-          background: "black",
-          color: "white",
-        }}
-      >
-        <option value="spot">Crypto Spot</option>
-        <option value="futures">Crypto Futures</option>
-      </select>
-
-      <select
-        value={mode}
-        onChange={(e) => setMode(e.target.value)}
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "1px solid #555",
-          background: "black",
-          color: "white",
-        }}
-      >
-        <option value="scalp">Scalp</option>
-        <option value="daytrading">Daytrading</option>
-        <option value="swing">Swing</option>
-      </select>
-
-      <select
-        value={scanLimit}
-        onChange={(e) => setScanLimit(e.target.value)}
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "1px solid #555",
-          background: "black",
-          color: "white",
-        }}
-      >
-        <option value="20">20 Coins</option>
-        <option value="50">50 Coins</option>
-        <option value="100">100 Coins</option>
-      </select>
-
-      <input
-        value={accountSize}
-        onChange={(e) => setAccountSize(e.target.value)}
-        placeholder="Kontogrösse"
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "1px solid #555",
-          background: "black",
-          color: "white",
-        }}
-      />
-
-      <input
-        value={riskPercent}
-        onChange={(e) => setRiskPercent(e.target.value)}
-        placeholder="Risiko %"
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "1px solid #555",
-          background: "black",
-          color: "white",
-        }}
-      />
-
-      <select
-        value={alertFilter}
-        onChange={(e) => setAlertFilter(e.target.value)}
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "1px solid #555",
-          background: "black",
-          color: "white",
-        }}
-      >
-        <option value="all">Alle Setups</option>
-        <option value="a-plus">Nur A+</option>
-        <option value="a-and-better">A+ und A</option>
-        <option value="watchlist">Ab Watchlist</option>
-      </select>
-
-      <button
-        onClick={() => analyzeMarket()}
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "none",
-          cursor: "pointer",
-          background: "#22c55e",
-          color: "white",
-          fontWeight: "bold",
-        }}
-      >
-        Einzelanalyse starten
-      </button>
-
-      <button
-        onClick={scanMarket}
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "none",
-          cursor: "pointer",
-          background: "#2563eb",
-          color: "white",
-          fontWeight: "bold",
-        }}
-      >
-        {loadingScan
-          ? `Scanne ${marketType === "futures" ? "Futures" : "Spot"}...`
-          : `Market Scanner (${scanLimit} ${marketType === "futures" ? "Futures" : "Spot"})`}
-      </button>
-
-      <button
-        onClick={scanIndices}
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "none",
-          cursor: "pointer",
-          background: "#9333ea",
-          color: "white",
-          fontWeight: "bold",
-        }}
-      >
-        {loadingIndices ? "US Markt wird gescannt..." : "US Markt scannen"}
-      </button>
-
-      <button
-        onClick={enableNotifications}
-        style={{
-          padding: 12,
-          borderRadius: 10,
-          border: "none",
-          cursor: "pointer",
-          background: notificationsEnabled ? "#16a34a" : "#374151",
-          color: "white",
-          fontWeight: "bold",
-        }}
-      >
-        {notificationsEnabled ? "Alerts aktiviert" : "Browser Alerts aktivieren"}
-      </button>
-
-      <div
-        style={{
-          marginTop: 12,
-          display: "flex",
-          gap: 10,
-          alignItems: "center",
-          flexWrap: "wrap",
-        }}
-      >
-        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={autoRefresh}
-            onChange={(e) => setAutoRefresh(e.target.checked)}
-          />
-          Auto Refresh
-        </label>
-
-        <select
-          value={refreshInterval}
-          onChange={(e) => setRefreshInterval(Number(e.target.value))}
-          style={{
-            padding: 6,
-            borderRadius: 6,
-            background: "black",
-            color: "white",
-            border: "1px solid #444",
-          }}
-        >
-          <option value={5}>5s</option>
-          <option value={10}>10s</option>
-          <option value={15}>15s</option>
-          <option value={30}>30s</option>
-          <option value={60}>60s</option>
-        </select>
-
-        {autoRefresh && (
-          <span style={{ color: "#22c55e" }}>
-            Nächster Scan in {refreshCountdown} Sekunden
-          </span>
-        )}
-      </div>
-    </div>
-
-    {result && (
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: 12,
-          marginTop: 30,
-        }}
-      >
+      {analyzeError && (
         <div
           style={{
-            border: "1px solid #333",
+            marginTop: 12,
+            padding: 12,
             borderRadius: 10,
-            padding: 14,
+            border: "1px solid #7f1d1d",
+            background: "#2b0a0a",
+            color: "#fca5a5",
           }}
         >
-          <div style={{ fontSize: 12, color: "#9ca3af", textTransform: "uppercase" }}>
-            Enhanced Score
-          </div>
-          <div
-            style={{
-              marginTop: 8,
-              fontSize: 32,
-              fontWeight: "bold",
-              color: getScoreColor(enhancedScore),
-            }}
-          >
-            {enhancedScore}
-          </div>
-          <div style={{ marginTop: 8, color: "#d1d5db" }}>
-            Confidence: <strong>{confidence}</strong>
-          </div>
-          <div style={{ color: "#d1d5db" }}>
-            Bias: <strong>{bias}</strong>
-          </div>
+          {analyzeError}
         </div>
+      )}
 
-        <div
-          style={{
-            border: "1px solid #333",
-            borderRadius: 10,
-            padding: 14,
-          }}
-        >
-          <div style={{ fontSize: 12, color: "#9ca3af", textTransform: "uppercase" }}>
-            Market Regime
-          </div>
-          <div
-            style={{
-              marginTop: 8,
-              fontSize: 24,
-              fontWeight: "bold",
-              color: getRegimeColor(marketRegime),
-            }}
-          >
-            {marketRegime}
-          </div>
-          <div style={{ marginTop: 8, color: "#d1d5db" }}>
-            Price Change: {priceChangePct.toFixed(2)}%
-          </div>
-          <div style={{ color: "#d1d5db" }}>
-            OI Change: {oiChangePct.toFixed(2)}%
-          </div>
-        </div>
-
-        <div
-          style={{
-            border: "1px solid #333",
-            borderRadius: 10,
-            padding: 14,
-          }}
-        >
-          <div style={{ fontSize: 12, color: "#9ca3af", textTransform: "uppercase" }}>
-            Whale Detection
-          </div>
-          <div
-            style={{
-              marginTop: 8,
-              fontSize: 24,
-              fontWeight: "bold",
-              color: whaleSignal.active
-                ? whaleSignal.strength === "high"
-                  ? "#ef4444"
-                  : whaleSignal.strength === "medium"
-                  ? "#f97316"
-                  : "#eab308"
-                : "#9ca3af",
-            }}
-          >
-            {whaleSignal.active ? `Active (${whaleSignal.strength})` : "Inactive"}
-          </div>
-          <div style={{ marginTop: 8, color: "#d1d5db" }}>{whaleSignal.message}</div>
-          <div style={{ color: "#d1d5db" }}>Volume Ratio: {volumeRatio.toFixed(2)}x</div>
-        </div>
-
-        <div
-          style={{
-            border: "1px solid #333",
-            borderRadius: 10,
-            padding: 14,
-          }}
-        >
-          <div style={{ fontSize: 12, color: "#9ca3af", textTransform: "uppercase" }}>
-            Live Status
-          </div>
-          <div
-            style={{
-              marginTop: 8,
-              fontSize: 24,
-              fontWeight: "bold",
-              color:
-                liveStatus === "Live"
-                  ? "#22c55e"
-                  : liveStatus === "Error"
-                  ? "#ef4444"
-                  : "#eab308",
-            }}
-          >
-            {liveStatus}
-          </div>
-          <div style={{ marginTop: 8, color: "#d1d5db" }}>
-            Live Preis: {livePrice ?? result?.lastPrice ?? "-"}
-          </div>
-          <div style={{ color: "#d1d5db" }}>
-            Live Change: {livePriceChange !== null ? `${livePriceChange}%` : "-"}
-          </div>
-        </div>
-      </div>
-    )}
-
-    {alerts.length > 0 && (
       <div
         style={{
           marginTop: 20,
-          padding: 16,
+          padding: 20,
           border: "1px solid #333",
           borderRadius: 10,
-          display: "grid",
-          gap: 10,
-        }}
-      >
-        <h2>Live Alerts</h2>
-
-        {alerts.map((alert) => (
-          <div
-            key={alert.id}
-            style={{
-              padding: 12,
-              border: "1px solid #222",
-              borderRadius: 8,
-              background: "#0a0a0a",
-            }}
-          >
-            <div
-              style={{
-                fontWeight: "bold",
-                color:
-                  alert.type === "bullish"
-                    ? "#22c55e"
-                    : alert.type === "bearish"
-                    ? "#ef4444"
-                    : alert.type === "warning"
-                    ? "#f97316"
-                    : "#9ca3af",
-              }}
-            >
-              {alert.title}
-            </div>
-            <div style={{ marginTop: 4, color: "#d1d5db" }}>
-              {alert.message}
-            </div>
-          </div>
-        ))}
-      </div>
-    )}
-
-    {regimeData && !regimeData.error && (
-      <div
-        style={{
-          marginTop: 30,
-          padding: 16,
-          border: "1px solid #333",
-          borderRadius: 10,
-          display: "grid",
-          gap: 12,
+          background: "#111",
         }}
       >
         <h2>Market Regime</h2>
 
-        <div>
-          <strong>Regime:</strong>
-          <span
-            style={{
-              marginLeft: 6,
-              color:
-                regimeData.regime === "Risk On"
-                  ? "#22c55e"
-                  : regimeData.regime === "Risk Off"
-                  ? "#ef4444"
-                  : "#eab308",
-            }}
-          >
-            {regimeData.regime}
-          </span>
-        </div>
-
-        <div>
-          <strong>Regime Score:</strong> {regimeData.regimeScore}
-        </div>
-
-        <div>
-          <strong>US Market Bias:</strong> {regimeData.usMarketBias}
-        </div>
-
-        <div>
-          <strong>Session Bias:</strong> {regimeData.sessionBias}
-        </div>
-
-        <div>
-          <strong>Market State:</strong>
-          <span
-            style={{
-              marginLeft: 6,
-              color:
-                regimeData.marketState?.includes("Up")
-                  ? "#22c55e"
-                  : regimeData.marketState?.includes("Down")
-                  ? "#ef4444"
-                  : "#eab308",
-            }}
-          >
-            {regimeData.marketState}
-          </span>
-        </div>
-
-        <div>
-          <strong>Squeeze Environment:</strong>
-          <span style={{ marginLeft: 6, color: "#22c55e" }}>
-            {regimeData.squeezeEnvironment}
-          </span>
-        </div>
-
-        <div>
-          <strong>Long Flush Environment:</strong>
-          <span style={{ marginLeft: 6, color: "#ef4444" }}>
-            {regimeData.longFlushEnvironment}
-          </span>
-        </div>
-
-        <div>
-          <strong>Trend Day:</strong> {regimeData.trendDay ? "Ja" : "Nein"}
-        </div>
-
-        <div>
-          <strong>Chop Day:</strong> {regimeData.chopDay ? "Ja" : "Nein"}
-        </div>
-      </div>
-    )}
-
-    {scanner.length > 0 && (
-      <div
-        style={{
-          marginTop: 30,
-          padding: 16,
-          border: "1px solid #333",
-          borderRadius: 10,
-          display: "grid",
-          gap: 12,
-        }}
-      >
-        <h2>Setup Dashboard</h2>
-
-        {bestOverall && (
-          <div>
-            <strong>Best Overall:</strong> {bestOverall.symbol} | {bestOverall.signal} | Score {bestOverall.score} | {bestOverall.alertLevel}
-            <div style={{ marginTop: 4, color: "#9ca3af" }}>
-              {bestOverall.whaleMove || "Neutral"} | {bestOverall.liquidationTrap || "Neutral"}
-            </div>
-          </div>
-        )}
-
-        {bestLong && (
-          <div>
-            <strong>Best Long:</strong> {bestLong.symbol} | Score {bestLong.score} | {bestLong.alertLevel}
-          </div>
-        )}
-
-        {bestShort && (
-          <div>
-            <strong>Best Short:</strong> {bestShort.symbol} | Score {bestShort.score} | {bestShort.alertLevel}
-          </div>
-        )}
-
-        {mtfData && (
-          <div>
-            <strong>MTF Bias:</strong> {mtfData.mtfBias} | {mtfData.mtfAlignment}
-          </div>
-        )}
-
-        <div>
-          <strong>US Market Bias:</strong> {usMarketBias}
-        </div>
-
-        {regimeData && (
-          <>
-            <div>
-              <strong>Regime:</strong> {regimeData.regime} | Score {regimeData.regimeScore}
-            </div>
-
-            <div>
-              <strong>Market State:</strong> {regimeData.marketState}
-            </div>
-          </>
-        )}
-
-        {oiDeltaData && (
-          <>
-            <div>
-              <strong>OI Structure:</strong> {oiDeltaData.structure} | {oiDeltaData.bias}
-            </div>
-
-            <div>
-              <strong>OI Delta:</strong> {oiDeltaData.oiDeltaPct}% | <strong>Funding Momentum:</strong> {oiDeltaData.fundingMomentum}
-            </div>
-
-            <div>
-              <strong>OI Quality:</strong> {oiDeltaData.quality}
-            </div>
-          </>
-        )}
-
-        <div>
-          <strong>High Quality Count:</strong> {highQualitySetups.length}
-        </div>
-      </div>
-    )}
-
-    {alertHistory.length > 0 && (
-      <div
-        style={{
-          marginTop: 30,
-          padding: 16,
-          border: "1px solid #333",
-          borderRadius: 10,
-          display: "grid",
-          gap: 10,
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2>Alert History</h2>
-          <button
-            onClick={() => setAlertHistory([])}
-            style={{
-              padding: "8px 12px",
-              borderRadius: 8,
-              border: "none",
-              cursor: "pointer",
-              background: "#374151",
-              color: "white",
-            }}
-          >
-            Leeren
-          </button>
-        </div>
-
-        {alertHistory.map((alert: any, index: number) => (
-          <div
-            key={`${alert.symbol}-${alert.time}-${index}`}
-            style={{
-              padding: 10,
-              border: "1px solid #222",
-              borderRadius: 8,
-            }}
-          >
-            <strong
-              style={{
-                color:
-                  alert.type === "Alert Upgrade"
-                    ? "#22c55e"
-                    : alert.type === "Trap Signal"
-                    ? "#f97316"
-                    : alert.type === "Whale Move"
-                    ? "#60a5fa"
-                    : "#eab308",
-              }}
-            >
-              {alert.type}
-            </strong>{" "}
-            | {alert.symbol} | {alert.time}
-            <div style={{ marginTop: 4, color: "#d1d5db" }}>
-              {alert.text}
-            </div>
-          </div>
-        ))}
-      </div>
-    )}
-
-    {scanner.length > 0 && (
-      <div style={{ marginTop: 30 }}>
-        <h2>Signal Board</h2>
-
         <div
           style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-            gap: 12,
+            fontSize: 24,
+            fontWeight: "bold",
+            color:
+              regime === "Bullish Expansion"
+                ? "#22c55e"
+                : regime === "Bearish Expansion"
+                ? "#ef4444"
+                : regime === "Range"
+                ? "#eab308"
+                : regime === "Volatile"
+                ? "#f97316"
+                : "#6b7280",
           }}
         >
-          <div
-            style={{
-              border: "1px solid #333",
-              borderRadius: 10,
-              padding: 12,
-            }}
-          >
-            <h3>Fresh A+ Alerts</h3>
-            {aPlusSignals.length === 0 && <p>Keine A+ Signale</p>}
-            {aPlusSignals.map((coin: any, index: number) => (
-              <div
-                key={index}
-                onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
-                style={{
-                  marginTop: 8,
-                  padding: 8,
-                  border: "1px solid #222",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                }}
-              >
-                <strong>{coin.symbol}</strong> | {coin.signal} | <span style={{ color: getAlertColor(coin.alertLevel) }}>{coin.alertLevel}</span> | Score <span style={{ color: getScoreColor(coin.score) }}>{coin.score}</span>
-              </div>
-            ))}
-          </div>
-
-          <div
-            style={{
-              border: "1px solid #333",
-              borderRadius: 10,
-              padding: 12,
-            }}
-          >
-            <h3>Fresh A Alerts</h3>
-            {aSignals.length === 0 && <p>Keine A Signale</p>}
-            {aSignals.map((coin: any, index: number) => (
-              <div
-                key={index}
-                onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
-                style={{
-                  marginTop: 8,
-                  padding: 8,
-                  border: "1px solid #222",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                }}
-              >
-                <strong>{coin.symbol}</strong> | {coin.signal} | <span style={{ color: getAlertColor(coin.alertLevel) }}>{coin.alertLevel}</span> | Score <span style={{ color: getScoreColor(coin.score) }}>{coin.score}</span>
-              </div>
-            ))}
-          </div>
-
-          <div
-            style={{
-              border: "1px solid #333",
-              borderRadius: 10,
-              padding: 12,
-            }}
-          >
-            <h3>Short Squeeze Candidates</h3>
-            {shortSqueezeSignals.length === 0 && <p>Keine Kandidaten</p>}
-            {shortSqueezeSignals.map((coin: any, index: number) => (
-              <div
-                key={index}
-                onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
-                style={{
-                  marginTop: 8,
-                  padding: 8,
-                  border: "1px solid #222",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                }}
-              >
-                <strong>{coin.symbol}</strong> | {coin.liquidationTrap} | {coin.alertLevel}
-              </div>
-            ))}
-          </div>
-
-          <div
-            style={{
-              border: "1px solid #333",
-              borderRadius: 10,
-              padding: 12,
-            }}
-          >
-            <h3>Long Flush Candidates</h3>
-            {longFlushSignals.length === 0 && <p>Keine Kandidaten</p>}
-            {longFlushSignals.map((coin: any, index: number) => (
-              <div
-                key={index}
-                onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
-                style={{
-                  marginTop: 8,
-                  padding: 8,
-                  border: "1px solid #222",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                }}
-              >
-                <strong>{coin.symbol}</strong> | {coin.liquidationTrap} | {coin.alertLevel}
-              </div>
-            ))}
-          </div>
+          {regime}
         </div>
 
         <div
           style={{
             marginTop: 20,
+            padding: 20,
             border: "1px solid #333",
             borderRadius: 10,
-            padding: 12,
+            background: "#111",
           }}
         >
-          <h3>Top 5 Live Signals</h3>
-          {liveTopSignals.length === 0 && <p>Keine Daten</p>}
-          {liveTopSignals.map((coin: any, index: number) => (
-            <div
-              key={index}
-              onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
-              style={{
-                marginTop: 8,
-                padding: 8,
-                border: "1px solid #222",
-                borderRadius: 8,
-                cursor: "pointer",
-              }}
-            >
-              <strong>{coin.symbol}</strong> | {coin.signal} | {coin.alertLevel} | Score {coin.score} | {coin.oiStructure || "-"}
-            </div>
-          ))}
+          <h2>OI Delta Radar</h2>
+
+          <div
+            style={{
+              fontSize: 24,
+              fontWeight: "bold",
+              color: getOiDeltaColor(oiDeltaSignal),
+              marginBottom: 10,
+            }}
+          >
+            {oiDeltaSignal}
+          </div>
+
+          <div style={{ color: "#aaa", fontSize: 14 }}>
+            OI Delta: {Number(oiDeltaData?.oiDelta ?? 0).toFixed(2)}
+          </div>
+
+          <div style={{ color: "#aaa", fontSize: 14, marginTop: 6 }}>
+            Price Change: {Number(oiDeltaData?.priceChange ?? 0).toFixed(2)}%
+          </div>
         </div>
       </div>
-    )}
 
-    {scanner.length > 0 && (
-      <div style={{ marginTop: 30 }}>
-        <h2>Score Radar</h2>
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          overflowX: "auto",
+          padding: "10px 0",
+          marginTop: 10,
+        }}
+      >
+        {assetTabs.map((tab) => {
+          const active = assetTab === tab
+
+          return (
+            <button
+              key={tab}
+              onClick={() => setAssetTab(tab)}
+              style={{
+                padding: "10px 16px",
+                borderRadius: 999,
+                border: "1px solid #333",
+                background: active ? "white" : "#1a1a1a",
+                color: active ? "black" : "white",
+                fontWeight: 600,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {tab}
+            </button>
+          )
+        })}
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gap: 12,
+          maxWidth: 460,
+          marginTop: 20,
+        }}
+      >
+        <input
+  value={symbol}
+onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+  placeholder="BTCUSDT"
+  style={{
+    padding: 12,
+    borderRadius: 10,
+    border: "1px solid #555",
+    background: "black",
+    color: "white",
+  }}
+/>
+
+        <select
+  title="Timeframe"
+  aria-label="Timeframe"
+  value={interval}
+  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+    setInterval(e.target.value)
+  }
+  style={{
+    padding: 12,
+    borderRadius: 10,
+    border: "1px solid #555",
+    background: "black",
+    color: "white",
+  }}
+>
+          <option value="15m">Scalp</option>
+          <option value="1h">Daytrading</option>
+          <option value="4h">Swing</option>
+          <option value="1d">Position</option>
+          <option value="1w">Macro</option>
+        </select>
+
+        <select
+  title="Market Type"
+  aria-label="Market Type"
+  value={marketType}
+  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+    setMarketType(e.target.value)
+  }
+  style={{
+    padding: 12,
+    borderRadius: 10,
+    border: "1px solid #555",
+    background: "black",
+    color: "white",
+  }}
+>
+          <option value="spot">Crypto Spot</option>
+          <option value="futures">Crypto Futures</option>
+        </select>
+
+        <select
+  title="Trading Mode"
+  aria-label="Trading Mode"
+  value={mode}
+  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+    setMode(e.target.value)
+  }
+  style={{
+    padding: 12,
+    borderRadius: 10,
+    border: "1px solid #555",
+    background: "black",
+    color: "white",
+  }}
+>
+          <option value="scalp">Scalp</option>
+          <option value="daytrading">Daytrading</option>
+          <option value="swing">Swing</option>
+        </select>
+
+        <select
+  title="Scan Limit"
+  aria-label="Scan Limit"
+  value={scanLimit}
+  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+    setScanLimit(e.target.value)
+  }
+  style={{
+    padding: 12,
+    borderRadius: 10,
+    border: "1px solid #555",
+    background: "black",
+    color: "white",
+  }}
+>
+          <option value="20">20 Coins</option>
+          <option value="50">50 Coins</option>
+          <option value="100">100 Coins</option>
+        </select>
+
+        <input
+          value={accountSize}
+          onChange={(e) => setAccountSize(e.target.value)}
+          placeholder="Kontogrösse"
+          style={{
+            padding: 12,
+            borderRadius: 10,
+            border: "1px solid #555",
+            background: "black",
+            color: "white",
+          }}
+        />
+
+        <input
+          value={riskPercent}
+          onChange={(e) => setRiskPercent(e.target.value)}
+          placeholder="Risiko %"
+          style={{
+            padding: 12,
+            borderRadius: 10,
+            border: "1px solid #555",
+            background: "black",
+            color: "white",
+          }}
+        />
+
+        <select
+  title="Alert Filter"
+  aria-label="Alert Filter"
+  value={alertFilter}
+  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+    setAlertFilter(e.target.value)
+  }
+  style={{
+    padding: 12,
+    borderRadius: 10,
+    border: "1px solid #555",
+    background: "black",
+    color: "white",
+  }}
+>
+          <option value="all">Alle Setups</option>
+          <option value="a-plus">Nur A+</option>
+          <option value="a-and-better">A+ und A</option>
+          <option value="watchlist">Ab Watchlist</option>
+        </select>
+
+        <button
+          onClick={() => analyzeMarket()}
+          style={{
+            padding: 12,
+            borderRadius: 10,
+            border: "none",
+            cursor: "pointer",
+            background: "#22c55e",
+            color: "white",
+            fontWeight: "bold",
+          }}
+        >
+          Einzelanalyse starten
+        </button>
+
+        <button
+          onClick={scanMarket}
+          style={{
+            padding: 12,
+            borderRadius: 10,
+            border: "none",
+            cursor: "pointer",
+            background: "#2563eb",
+            color: "white",
+            fontWeight: "bold",
+          }}
+        >
+          {loadingScan
+            ? `Scanne ${marketType === "futures" ? "Futures" : "Spot"}...`
+            : `Market Scanner (${scanLimit} ${
+                marketType === "futures" ? "Futures" : "Spot"
+              })`}
+        </button>
+
+        <button
+          onClick={scanIndices}
+          style={{
+            padding: 12,
+            borderRadius: 10,
+            border: "none",
+            cursor: "pointer",
+            background: "#9333ea",
+            color: "white",
+            fontWeight: "bold",
+          }}
+        >
+          {loadingIndices ? "US Markt wird gescannt..." : "US Markt scannen"}
+        </button>
+
+        <button
+          onClick={enableNotifications}
+          style={{
+            padding: 12,
+            borderRadius: 10,
+            border: "none",
+            cursor: "pointer",
+            background: notificationsEnabled ? "#16a34a" : "#374151",
+            color: "white",
+            fontWeight: "bold",
+          }}
+        >
+          {notificationsEnabled ? "Alerts aktiviert" : "Browser Alerts aktivieren"}
+        </button>
 
         <div
           style={{
+            marginTop: 12,
+            display: "flex",
+            gap: 10,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+            />
+            Auto Refresh
+          </label>
+
+          <select
+  title="Refresh Interval"
+  aria-label="Refresh Interval"
+  value={refreshInterval}
+  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+    setRefreshInterval(Number(e.target.value))
+  }
+  style={{
+    padding: 6,
+    borderRadius: 6,
+    background: "black",
+    color: "white",
+    border: "1px solid #444",
+  }}
+>
+            <option value={5}>5s</option>
+            <option value={10}>10s</option>
+            <option value={15}>15s</option>
+            <option value={30}>30s</option>
+            <option value={60}>60s</option>
+          </select>
+
+          {autoRefresh && (
+            <span style={{ color: "#22c55e" }}>
+              Nächster Scan in {refreshCountdown} Sekunden
+            </span>
+          )}
+        </div>
+      </div>
+
+      {result && (
+        <div
+          style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 12,
+            marginTop: 30,
+          }}
+        >
+          <div
+            style={{
+              border: "1px solid #333",
+              borderRadius: 10,
+              padding: 14,
+            }}
+          >
+            <div style={{ fontSize: 12, color: "#9ca3af", textTransform: "uppercase" }}>
+              Enhanced Score
+            </div>
+            <div
+              style={{
+                marginTop: 8,
+                fontSize: 32,
+                fontWeight: "bold",
+                color: getScoreColor(enhancedScore),
+              }}
+            >
+              {enhancedScore}
+            </div>
+            <div style={{ marginTop: 8, color: "#d1d5db" }}>
+              Confidence: <strong>{confidence}</strong>
+            </div>
+            <div style={{ color: "#d1d5db" }}>
+              Bias: <strong>{bias}</strong>
+            </div>
+          </div>
+
+          <div
+            style={{
+              border: "1px solid #333",
+              borderRadius: 10,
+              padding: 14,
+            }}
+          >
+            <div style={{ fontSize: 12, color: "#9ca3af", textTransform: "uppercase" }}>
+              Market Regime
+            </div>
+            <div
+              style={{
+                marginTop: 8,
+                fontSize: 24,
+                fontWeight: "bold",
+                color: getRegimeColor(marketRegime),
+              }}
+            >
+              {marketRegime}
+            </div>
+            <div style={{ marginTop: 8, color: "#d1d5db" }}>
+              Price Change: {priceChangePct.toFixed(2)}%
+            </div>
+            <div style={{ color: "#d1d5db" }}>
+              OI Change: {oiChangePct.toFixed(2)}%
+            </div>
+          </div>
+
+          <div
+            style={{
+              border: "1px solid #333",
+              borderRadius: 10,
+              padding: 14,
+            }}
+          >
+            <div style={{ fontSize: 12, color: "#9ca3af", textTransform: "uppercase" }}>
+              Whale Detection
+            </div>
+            <div
+              style={{
+                marginTop: 8,
+                fontSize: 24,
+                fontWeight: "bold",
+                color: whaleSignal.active
+                  ? whaleSignal.strength === "high"
+                    ? "#ef4444"
+                    : whaleSignal.strength === "medium"
+                    ? "#f97316"
+                    : "#eab308"
+                  : "#9ca3af",
+              }}
+            >
+              {whaleSignal.active ? `Active (${whaleSignal.strength})` : "Inactive"}
+            </div>
+            <div style={{ marginTop: 8, color: "#d1d5db" }}>{whaleSignal.message}</div>
+            <div style={{ color: "#d1d5db" }}>Volume Ratio: {volumeRatio.toFixed(2)}x</div>
+          </div>
+
+          <div
+            style={{
+              border: "1px solid #333",
+              borderRadius: 10,
+              padding: 14,
+            }}
+          >
+            <div style={{ fontSize: 12, color: "#9ca3af", textTransform: "uppercase" }}>
+              Live Status
+            </div>
+            <div
+              style={{
+                marginTop: 8,
+                fontSize: 24,
+                fontWeight: "bold",
+                color:
+                  liveStatus === "Live"
+                    ? "#22c55e"
+                    : liveStatus === "Error"
+                    ? "#ef4444"
+                    : "#eab308",
+              }}
+            >
+              {liveStatus}
+            </div>
+            <div style={{ marginTop: 8, color: "#d1d5db" }}>
+              Live Preis: {livePrice ?? result?.lastPrice ?? "-"}
+            </div>
+            <div style={{ color: "#d1d5db" }}>
+              Live Change: {livePriceChange !== null ? `${livePriceChange}%` : "-"}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {alerts.length > 0 && (
+        <div
+          style={{
+            marginTop: 20,
+            padding: 16,
+            border: "1px solid #333",
+            borderRadius: 10,
+            display: "grid",
+            gap: 10,
+          }}
+        >
+          <h2>Live Alerts</h2>
+
+          {alerts.map((alert) => (
+            <div
+              key={alert.id}
+              style={{
+                padding: 12,
+                border: "1px solid #222",
+                borderRadius: 8,
+                background: "#0a0a0a",
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: "bold",
+                  color:
+                    alert.type === "bullish"
+                      ? "#22c55e"
+                      : alert.type === "bearish"
+                      ? "#ef4444"
+                      : alert.type === "warning"
+                      ? "#f97316"
+                      : "#9ca3af",
+                }}
+              >
+                {alert.title}
+              </div>
+              <div style={{ marginTop: 4, color: "#d1d5db" }}>{alert.message}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {regimeData && !regimeData.error && (
+        <div
+          style={{
+            marginTop: 30,
+            padding: 16,
+            border: "1px solid #333",
+            borderRadius: 10,
+            display: "grid",
             gap: 12,
           }}
         >
-          {filteredByAssetTab.slice(0, 6).map((coin: any, index: number) => (
+          <h2>Market Regime</h2>
+
+          <div>
+            <strong>Regime:</strong>
+            <span
+              style={{
+                marginLeft: 6,
+                color:
+                  regimeData.regime === "Risk On"
+                    ? "#22c55e"
+                    : regimeData.regime === "Risk Off"
+                    ? "#ef4444"
+                    : "#eab308",
+              }}
+            >
+              {regimeData.regime}
+            </span>
+          </div>
+
+          <div>
+            <strong>Regime Score:</strong> {regimeData.regimeScore}
+          </div>
+
+          <div>
+            <strong>US Market Bias:</strong> {regimeData.usMarketBias}
+          </div>
+
+          <div>
+            <strong>Session Bias:</strong> {regimeData.sessionBias}
+          </div>
+
+          <div>
+            <strong>Market State:</strong>
+            <span
+              style={{
+                marginLeft: 6,
+                color:
+                  regimeData.marketState?.includes("Up")
+                    ? "#22c55e"
+                    : regimeData.marketState?.includes("Down")
+                    ? "#ef4444"
+                    : "#eab308",
+              }}
+            >
+              {regimeData.marketState}
+            </span>
+          </div>
+
+          <div>
+            <strong>Squeeze Environment:</strong>
+            <span style={{ marginLeft: 6, color: "#22c55e" }}>
+              {regimeData.squeezeEnvironment}
+            </span>
+          </div>
+
+          <div>
+            <strong>Long Flush Environment:</strong>
+            <span style={{ marginLeft: 6, color: "#ef4444" }}>
+              {regimeData.longFlushEnvironment}
+            </span>
+          </div>
+
+          <div>
+            <strong>Trend Day:</strong> {regimeData.trendDay ? "Ja" : "Nein"}
+          </div>
+
+          <div>
+            <strong>Chop Day:</strong> {regimeData.chopDay ? "Ja" : "Nein"}
+          </div>
+        </div>
+      )}
+
+      {scanner.length > 0 && (
+  <div
+    style={{
+      marginTop: 30,
+      padding: 16,
+      border: "1px solid #333",
+      borderRadius: 10,
+      display: "grid",
+      gap: 12,
+    }}
+  >
+    <h2>Setup Dashboard</h2>
+    
+
+    {bestOverall && (
+      <div>
+        <strong>Best Overall:</strong> {bestOverall.symbol} | {bestOverall.signal} |
+        Score {bestOverall.score} | {bestOverall.alertLevel}
+      </div>
+    )}
+
+   
+          {bestOverall && (
+            <div>
+              <strong>Best Overall:</strong> {bestOverall.symbol} | {bestOverall.signal} |
+              Score {bestOverall.score} | {bestOverall.alertLevel}
+              <div style={{ marginTop: 4, color: "#9ca3af" }}>
+                {bestOverall.whaleMove || "Neutral"} |{" "}
+                {bestOverall.liquidationTrap || "Neutral"}
+              </div>
+            </div>
+          )}
+
+          {bestLong && (
+            <div>
+              <strong>Best Long:</strong> {bestLong.symbol} | Score {bestLong.score} |{" "}
+              {bestLong.alertLevel}
+            </div>
+          )}
+
+          {bestShort && (
+            <div>
+              <strong>Best Short:</strong> {bestShort.symbol} | Score {bestShort.score} |{" "}
+              {bestShort.alertLevel}
+            </div>
+          )}
+
+          {mtfData && (
+            <div>
+              <strong>MTF Bias:</strong> {mtfData.mtfBias} | {mtfData.mtfAlignment}
+            </div>
+          )}
+
+          <div>
+            <strong>US Market Bias:</strong> {usMarketBias}
+          </div>
+
+          {regimeData && (
+            <>
+              <div>
+                <strong>Regime:</strong> {regimeData.regime} | Score {regimeData.regimeScore}
+              </div>
+
+              <div>
+                <strong>Market State:</strong> {regimeData.marketState}
+              </div>
+            </>
+          )}
+
+          {oiDeltaData && (
+            <>
+              <div>
+                <strong>OI Structure:</strong> {oiDeltaData.structure} | {oiDeltaData.bias}
+              </div>
+
+              <div>
+                <strong>OI Delta:</strong> {oiDeltaData.oiDeltaPct}% |{" "}
+                <strong>Funding Momentum:</strong> {oiDeltaData.fundingMomentum}
+              </div>
+
+              <div>
+                <strong>OI Quality:</strong> {oiDeltaData.quality}
+              </div>
+            </>
+          )}
+
+          <div>
+            <strong>High Quality Count:</strong> {highQualitySetups.length}
+          </div>
+        </div>
+      )}
+
+      {alertHistory.length > 0 && (
+        <div
+          style={{
+            marginTop: 30,
+            padding: 16,
+            border: "1px solid #333",
+            borderRadius: 10,
+            display: "grid",
+            gap: 10,
+          }}
+        >
+          <div
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
+          >
+            <h2>Alert History</h2>
+            <button
+              onClick={() => setAlertHistory([])}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                border: "none",
+                cursor: "pointer",
+                background: "#374151",
+                color: "white",
+              }}
+            >
+              Leeren
+            </button>
+          </div>
+
+          {alertHistory.map((alert: any, index: number) => (
             <div
-              key={index}
-              onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
+              key={`${alert.symbol}-${alert.time}-${index}`}
+              style={{
+                padding: 10,
+                border: "1px solid #222",
+                borderRadius: 8,
+              }}
+            >
+              <strong
+                style={{
+                  color:
+                    alert.type === "Alert Upgrade"
+                      ? "#22c55e"
+                      : alert.type === "Trap Signal"
+                      ? "#f97316"
+                      : alert.type === "Whale Move"
+                      ? "#60a5fa"
+                      : "#eab308",
+                }}
+              >
+                {alert.type}
+              </strong>{" "}
+              | {alert.symbol} | {alert.time}
+              <div style={{ marginTop: 4, color: "#d1d5db" }}>{alert.text}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {scanner.length > 0 && (
+        <div style={{ marginTop: 30 }}>
+          <h2>Signal Board</h2>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <div
               style={{
                 border: "1px solid #333",
                 borderRadius: 10,
                 padding: 12,
-                cursor: "pointer",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <strong>{coin.symbol}</strong>
-                <span style={{ color: getAlertColor(coin.alertLevel) }}>
-                  {coin.alertLevel}
-                </span>
-              </div>
-
-              <div style={{ marginTop: 8, fontSize: 14 }}>
-                {coin.signal} | {coin.trend}
-              </div>
-
-              <div
-                style={{
-                  marginTop: 10,
-                  height: 10,
-                  background: "#222",
-                  borderRadius: 999,
-                  overflow: "hidden",
-                }}
-              >
+              <h3>Fresh A+ Alerts</h3>
+              {aPlusSignals.length === 0 && <p>Keine A+ Signale</p>}
+              {aPlusSignals.map((coin: any, index: number) => (
                 <div
-                  style={{
-                    width: `${coin.score}%`,
-                    height: "100%",
-                    background: getScoreColor(coin.score),
-                  }}
-                />
-              </div>
-
-              <div
-                style={{
-                  marginTop: 8,
-                  fontSize: 14,
-                  fontWeight: "bold",
-                  color: getScoreColor(coin.score),
-                }}
-              >
-                Score: {coin.score}
-              </div>
-
-              <div style={{ marginTop: 4, fontSize: 13, color: "#9ca3af" }}>
-                {coin.macroAlignment} | {coin.regimeAlignment || "-"} | {coin.futuresAlignment} | {coin.mtfStatus}
-              </div>
-
-              <div style={{ marginTop: 6, fontSize: 12, color: "#d1d5db" }}>
-                {coin.whaleMove || "Neutral"}
-              </div>
-
-              <div style={{ marginTop: 4, fontSize: 12, color: "#fca5a5" }}>
-                {coin.liquidationTrap || "Neutral"}
-              </div>
-
-              <div style={{ marginTop: 4, fontSize: 12, color: "#93c5fd" }}>
-                {coin.oiStructure || "Neutral"} | {coin.oiBias || "Neutral"}
-              </div>
-
-              <div style={{ marginTop: 4, fontSize: 12, color: "#c4b5fd" }}>
-                OI Δ {coin.oiDeltaPct ?? "-"}% | Funding {coin.oiFundingMomentum || "-"}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    )}
-
-    {topLongs.length > 0 && (
-      <div style={{ marginTop: 30 }}>
-        <h2 style={{ color: "#22c55e" }}>Top Long Setups</h2>
-        {topLongs.map((coin: any, index: number) => (
-          <div
-            key={index}
-            onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
-            style={{
-              cursor: "pointer",
-              padding: 10,
-              border: "1px solid #1f2937",
-              marginBottom: 8,
-              borderRadius: 8,
-            }}
-          >
-            <strong>{coin.symbol}</strong> | {coin.signal} | Entry {coin.entryLow} - {coin.entryHigh} | TP1 {coin.tp1} | RR {coin.rr} | {coin.alertLevel} | {coin.oiStructure || "-"} | OI Δ {coin.oiDeltaPct ?? "-"}%
-          </div>
-        ))}
-      </div>
-    )}
-
-    {topShorts.length > 0 && (
-      <div style={{ marginTop: 30 }}>
-        <h2 style={{ color: "#ef4444" }}>Top Short Setups</h2>
-        {topShorts.map((coin: any, index: number) => (
-          <div
-            key={index}
-            onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
-            style={{
-              cursor: "pointer",
-              padding: 10,
-              border: "1px solid #1f2937",
-              marginBottom: 8,
-              borderRadius: 8,
-            }}
-          >
-            <strong>{coin.symbol}</strong> | {coin.signal} | Entry {coin.entryLow} - {coin.entryHigh} | TP1 {coin.tp1} | RR {coin.rr} | {coin.alertLevel} | {coin.oiStructure || "-"} | OI Δ {coin.oiDeltaPct ?? "-"}%
-          </div>
-        ))}
-      </div>
-    )}
-
-    {indexScanner.length > 0 && (
-      <div style={{ marginTop: 30 }}>
-        <h2>US Markt Übersicht</h2>
-
-        <div style={{ overflowX: "auto" }}>
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              marginTop: 10,
-            }}
-          >
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", padding: 8 }}>Symbol</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Name</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Trend</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Signal</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Preis</th>
-                <th style={{ textAlign: "left", padding: 8 }}>RSI</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Score</th>
-              </tr>
-            </thead>
-            <tbody>
-              {indexScanner.map((item: any, index: number) => (
-                <tr key={index} style={{ borderTop: "1px solid #333" }}>
-                  <td style={{ padding: 8 }}>{item.symbol}</td>
-                  <td style={{ padding: 8 }}>{item.label}</td>
-                  <td style={{ padding: 8 }}>{item.trend || "-"}</td>
-                  <td style={{ padding: 8 }}>{item.signal || "-"}</td>
-                  <td style={{ padding: 8 }}>{item.lastPrice || "-"}</td>
-                  <td style={{ padding: 8 }}>{item.rsi || "-"}</td>
-                  <td style={{ padding: 8 }}>{item.score || "-"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    )}
-
-    {scanner.length > 0 && (
-      <div style={{ marginTop: 30 }}>
-        <h2>Scanner Übersicht</h2>
-        <p><strong>Mode:</strong> {mode}</p>
-        <p><strong>Markt:</strong> {marketType}</p>
-        <p><strong>Coins:</strong> {scanner.length}</p>
-        <p><strong>US Market Bias:</strong> {usMarketBias}</p>
-
-        <div style={{ overflowX: "auto" }}>
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              marginTop: 10,
-            }}
-          >
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", padding: 8 }}>Coin</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Signal</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Trend</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Score</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Macro</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Regime</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Futures</th>
-                <th style={{ textAlign: "left", padding: 8 }}>MTF</th>
-                <th style={{ textAlign: "left", padding: 8 }}>OI</th>
-                <th style={{ textAlign: "left", padding: 8 }}>OI Δ%</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Funding Mom</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Whale</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Trap</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Alert</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Entry</th>
-                <th style={{ textAlign: "left", padding: 8 }}>Stop</th>
-                <th style={{ textAlign: "left", padding: 8 }}>TP1</th>
-                <th style={{ textAlign: "left", padding: 8 }}>RR</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {filteredByAssetTab.map((coin: any, index: number) => (
-                <tr
                   key={index}
                   onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
                   style={{
+                    marginTop: 8,
+                    padding: 8,
+                    border: "1px solid #222",
+                    borderRadius: 8,
                     cursor: "pointer",
-                    borderTop: "1px solid #333",
                   }}
                 >
-                  <td style={{ padding: 8 }}>{coin.symbol}</td>
-                  <td style={{ padding: 8 }}>{coin.signal}</td>
-                  <td style={{ padding: 8 }}>{coin.trend}</td>
-                  <td style={{ padding: 8, color: getScoreColor(coin.score) }}>
-                    {coin.score}
-                  </td>
-                  <td style={{ padding: 8 }}>{coin.macroAlignment}</td>
-                  <td style={{ padding: 8 }}>{coin.regimeAlignment || "-"}</td>
-                  <td style={{ padding: 8 }}>{coin.futuresAlignment}</td>
-                  <td style={{ padding: 8 }}>{coin.mtfStatus}</td>
-                  <td style={{ padding: 8 }}>{coin.oiStructure || "-"}</td>
-                  <td style={{ padding: 8 }}>{coin.oiDeltaPct ?? "-"}</td>
-                  <td style={{ padding: 8 }}>{coin.oiFundingMomentum || "-"}</td>
-                  <td style={{ padding: 8 }}>{coin.whaleMove || "-"}</td>
-                  <td style={{ padding: 8 }}>{coin.liquidationTrap || "-"}</td>
-                  <td style={{ padding: 8, color: getAlertColor(coin.alertLevel) }}>
+                  <strong>{coin.symbol}</strong> | {coin.signal} |{" "}
+                  <span style={{ color: getAlertColor(coin.alertLevel) }}>
                     {coin.alertLevel}
-                  </td>
-                  <td style={{ padding: 8 }}>
-                    {coin.direction !== "Neutral" ? `${coin.entryLow} - ${coin.entryHigh}` : "-"}
-                  </td>
-                  <td style={{ padding: 8 }}>
-                    {coin.direction !== "Neutral" ? coin.stopLoss : "-"}
-                  </td>
-                  <td style={{ padding: 8 }}>
-                    {coin.direction !== "Neutral" ? coin.tp1 : "-"}
-                  </td>
-                  <td style={{ padding: 8 }}>
-                    {coin.direction !== "Neutral" ? coin.rr : "-"}
-                  </td>
-                </tr>
+                  </span>{" "}
+                  | Score <span style={{ color: getScoreColor(coin.score) }}>{coin.score}</span>
+                </div>
               ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    )}
+            </div>
 
-    <div
-      ref={chartContainerRef}
-      style={{
-        width: "100%",
-        minHeight: "520px",
-        marginTop: 40,
-        border: "1px solid #222",
-      }}
-    />
+            <div
+              style={{
+                border: "1px solid #333",
+                borderRadius: 10,
+                padding: 12,
+              }}
+            >
+              <h3>Fresh A Alerts</h3>
+              {aSignals.length === 0 && <p>Keine A Signale</p>}
+              {aSignals.map((coin: any, index: number) => (
+                <div
+                  key={index}
+                  onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
+                  style={{
+                    marginTop: 8,
+                    padding: 8,
+                    border: "1px solid #222",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                  }}
+                >
+                  <strong>{coin.symbol}</strong> | {coin.signal} |{" "}
+                  <span style={{ color: getAlertColor(coin.alertLevel) }}>
+                    {coin.alertLevel}
+                  </span>{" "}
+                  | Score <span style={{ color: getScoreColor(coin.score) }}>{coin.score}</span>
+                </div>
+              ))}
+            </div>
 
-    {result && (
-      <>
-        <div style={{ marginTop: 30 }}>
-          <h2>Detailanalyse</h2>
+            <div
+              style={{
+                border: "1px solid #333",
+                borderRadius: 10,
+                padding: 12,
+              }}
+            >
+              <h3>Short Squeeze Candidates</h3>
+              {shortSqueezeSignals.length === 0 && <p>Keine Kandidaten</p>}
+              {shortSqueezeSignals.map((coin: any, index: number) => (
+                <div
+                  key={index}
+                  onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
+                  style={{
+                    marginTop: 8,
+                    padding: 8,
+                    border: "1px solid #222",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                  }}
+                >
+                  <strong>{coin.symbol}</strong> | {coin.liquidationTrap} | {coin.alertLevel}
+                </div>
+              ))}
+            </div>
+
+            <div
+              style={{
+                border: "1px solid #333",
+                borderRadius: 10,
+                padding: 12,
+              }}
+            >
+              <h3>Long Flush Candidates</h3>
+              {longFlushSignals.length === 0 && <p>Keine Kandidaten</p>}
+              {longFlushSignals.map((coin: any, index: number) => (
+                <div
+                  key={index}
+                  onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
+                  style={{
+                    marginTop: 8,
+                    padding: 8,
+                    border: "1px solid #222",
+                    borderRadius: 8,
+                    cursor: "pointer",
+                  }}
+                >
+                  <strong>{coin.symbol}</strong> | {coin.liquidationTrap} | {coin.alertLevel}
+                </div>
+              ))}
+            </div>
+          </div>
 
           <div
             style={{
-              marginTop: 12,
-              marginBottom: 18,
-              padding: 12,
+              marginTop: 20,
               border: "1px solid #333",
               borderRadius: 10,
+              padding: 12,
             }}
           >
-            <h3>Live Price Stream</h3>
-            <p><strong>Status:</strong> {liveStatus}</p>
-            <p><strong>Live Preis:</strong> {livePrice ?? "-"}</p>
-            <p>
-              <strong>Live Change:</strong>{" "}
-              <span
+            <h3>Top 5 Live Signals</h3>
+            {liveTopSignals.length === 0 && <p>Keine Daten</p>}
+            {liveTopSignals.map((coin: any, index: number) => (
+              <div
+                key={index}
+                onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
                 style={{
-                  color:
-                    livePriceChange === null
-                      ? "white"
-                      : livePriceChange >= 0
-                      ? "#22c55e"
-                      : "#ef4444",
+                  marginTop: 8,
+                  padding: 8,
+                  border: "1px solid #222",
+                  borderRadius: 8,
+                  cursor: "pointer",
                 }}
               >
-                {livePriceChange !== null ? `${livePriceChange}%` : "-"}
-              </span>
-            </p>
+                <strong>{coin.symbol}</strong> | {coin.signal} | {coin.alertLevel} | Score{" "}
+                {coin.score} | {coin.oiStructure || "-"}
+              </div>
+            ))}
           </div>
+        </div>
+      )}
 
-          <p><strong>Symbol:</strong> {result?.symbol ?? symbol}</p>
-          <p><strong>Intervall:</strong> {result?.interval ?? interval}</p>
-          <p><strong>Markt:</strong> {result?.market ?? marketType}</p>
-          <p><strong>Letzter Preis:</strong> {result?.lastPrice ?? livePrice ?? "-"}</p>
-          <p><strong>Trend:</strong> {result?.trend ?? "-"}</p>
-          <p><strong>Signal:</strong> {result?.signal ?? "-"}</p>
-          <p><strong>RSI:</strong> {result?.indicators?.rsi ?? "-"}</p>
-          <p><strong>EMA20:</strong> {result?.indicators?.ema20 ?? "-"}</p>
-          <p><strong>EMA50:</strong> {result?.indicators?.ema50 ?? "-"}</p>
-          <p><strong>Support:</strong> {result?.indicators?.support ?? "-"}</p>
-          <p><strong>Resistance:</strong> {result?.indicators?.resistance ?? "-"}</p>
-          <p><strong>Last Update:</strong> {lastUpdated}</p>
-          <p><strong>Aktuelli Uhrziit:</strong> {nowTime}</p>
-          <p><strong>Nöchschti Candle in:</strong> {countdown}</p>
+      {scanner.length > 0 && (
+        <div style={{ marginTop: 30 }}>
+          <h2>Score Radar</h2>
 
-          {result.setup && result.setup.direction !== "Neutral" && (
-            <>
-              <p><strong>Richtung:</strong> {result.setup.direction}</p>
-              <p><strong>Entry Zone:</strong> {result.setup.entryLow} - {result.setup.entryHigh}</p>
-              <p><strong>Stop Loss:</strong> {result.setup.stopLoss}</p>
-              <p><strong>TP1:</strong> {result.setup.tp1}</p>
-              <p><strong>TP2:</strong> {result.setup.tp2}</p>
-              <p><strong>RR:</strong> {result.setup.rr}</p>
-            </>
-          )}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
+              gap: 12,
+            }}
+          >
+            {filteredByAssetTab.slice(0, 6).map((coin: any, index: number) => (
+              <div
+                key={index}
+                onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
+                style={{
+                  border: "1px solid #333",
+                  borderRadius: 10,
+                  padding: 12,
+                  cursor: "pointer",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <strong>{coin.symbol}</strong>
+                  <span style={{ color: getAlertColor(coin.alertLevel) }}>
+                    {coin.alertLevel}
+                  </span>
+                </div>
 
-          {positionData && (
-            <>
-              <h3>Positionsrechner</h3>
-              <p><strong>Kontogrösse:</strong> {accountSize}</p>
-              <p><strong>Risiko %:</strong> {riskPercent}</p>
-              <p><strong>Max Verlust:</strong> {positionData.riskAmount}</p>
-              <p><strong>Stop Distanz:</strong> {positionData.stopDistance}</p>
-              <p><strong>Positionsgrösse:</strong> {positionData.positionSize}</p>
-              <p><strong>Positionswert:</strong> {positionData.positionValue}</p>
-            </>
-          )}
+                <div style={{ marginTop: 8, fontSize: 14 }}>
+                  {coin.signal} | {coin.trend}
+                </div>
 
-          {futuresData && !futuresData.error && (
-            <div style={{ marginTop: 30 }}>
-              <h3>Futures Daten</h3>
-              <p><strong>Mark Price:</strong> {futuresData.markPrice}</p>
-              <p><strong>Index Price:</strong> {futuresData.indexPrice}</p>
-              <p><strong>Funding Rate:</strong> {futuresData.fundingRate}</p>
-              <p><strong>Funding Bias:</strong> {futuresData.fundingBias}</p>
-              <p><strong>Open Interest:</strong> {futuresData.openInterest}</p>
-              <p><strong>OI Trend:</strong> {futuresData.oiTrend}</p>
-            </div>
-          )}
-
-          {futuresIntel && !futuresIntel.error && (
-            <div style={{ marginTop: 30 }}>
-              <h3>Futures Intel</h3>
-              <p><strong>Price vs Index:</strong> {futuresIntel.priceVsIndex}</p>
-              <p><strong>Futures Insight:</strong> {futuresIntel.futuresInsight}</p>
-              <p><strong>Crowd Bias:</strong> {futuresIntel.crowdBias}</p>
-              <p><strong>Squeeze Risk:</strong> {futuresIntel.squeezeRisk}</p>
-              <p><strong>Pulse:</strong> {futuresIntel.crowdBias} | {futuresIntel.squeezeRisk}</p>
-            </div>
-          )}
-
-          {oiDeltaData && !oiDeltaData.error && (
-            <div style={{ marginTop: 30 }}>
-              <h3>OI Delta Radar</h3>
-
-              <p><strong>Current OI:</strong> {oiDeltaData.currentOpenInterest}</p>
-              <p><strong>Previous OI:</strong> {oiDeltaData.previousOpenInterest}</p>
-              <p><strong>OI Delta %:</strong> {oiDeltaData.oiDeltaPct}</p>
-              <p><strong>OI Momentum:</strong> {oiDeltaData.oiMomentum}</p>
-
-              <p><strong>Current Funding:</strong> {oiDeltaData.currentFundingRate}</p>
-              <p><strong>Previous Funding:</strong> {oiDeltaData.previousFundingRate}</p>
-              <p><strong>Funding Momentum:</strong> {oiDeltaData.fundingMomentum}</p>
-
-              <p><strong>Current Close:</strong> {oiDeltaData.currentClose}</p>
-              <p><strong>Previous Close:</strong> {oiDeltaData.previousClose}</p>
-              <p><strong>Price Delta %:</strong> {oiDeltaData.priceDeltaPct}</p>
-
-              <p>
-                <strong>Structure:</strong>{" "}
-                <span
+                <div
                   style={{
-                    color:
-                      oiDeltaData.structure === "Trend Confirmed"
-                        ? "#22c55e"
-                        : oiDeltaData.structure === "Short Squeeze Build"
-                        ? "#60a5fa"
-                        : oiDeltaData.structure === "Long Flush"
-                        ? "#ef4444"
-                        : "#eab308",
+                    marginTop: 10,
+                    height: 10,
+                    background: "#222",
+                    borderRadius: 999,
+                    overflow: "hidden",
                   }}
                 >
-                  {oiDeltaData.structure}
-                </span>
-              </p>
+                  <div
+                    style={{
+                      width: `${coin.score}%`,
+                      height: "100%",
+                      background: getScoreColor(coin.score),
+                    }}
+                  />
+                </div>
 
-              <p>
-                <strong>Bias:</strong>{" "}
-                <span
+                <div
                   style={{
-                    color:
-                      oiDeltaData.bias?.includes("Bullish")
-                        ? "#22c55e"
-                        : oiDeltaData.bias?.includes("Bearish")
-                        ? "#ef4444"
-                        : "white",
+                    marginTop: 8,
+                    fontSize: 14,
+                    fontWeight: "bold",
+                    color: getScoreColor(coin.score),
                   }}
                 >
-                  {oiDeltaData.bias}
-                </span>
-              </p>
+                  Score: {coin.score}
+                </div>
 
+                <div style={{ marginTop: 4, fontSize: 13, color: "#9ca3af" }}>
+                  {coin.macroAlignment} | {coin.regimeAlignment || "-"} |{" "}
+                  {coin.futuresAlignment} | {coin.mtfStatus}
+                </div>
+
+                <div style={{ marginTop: 6, fontSize: 12, color: "#d1d5db" }}>
+                  {coin.whaleMove || "Neutral"}
+                </div>
+
+                <div style={{ marginTop: 4, fontSize: 12, color: "#fca5a5" }}>
+                  {coin.liquidationTrap || "Neutral"}
+                </div>
+
+                <div style={{ marginTop: 4, fontSize: 12, color: "#93c5fd" }}>
+                  {coin.oiStructure || "Neutral"} | {coin.oiBias || "Neutral"}
+                </div>
+
+                <div style={{ marginTop: 4, fontSize: 12, color: "#c4b5fd" }}>
+                  OI Δ {coin.oiDeltaPct ?? "-"}% | Funding {coin.oiFundingMomentum || "-"}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {topLongs.length > 0 && (
+        <div style={{ marginTop: 30 }}>
+          <h2 style={{ color: "#22c55e" }}>Top Long Setups</h2>
+          {topLongs.map((coin: any, index: number) => (
+            <div
+              key={index}
+              onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
+              style={{
+                cursor: "pointer",
+                padding: 10,
+                border: "1px solid #1f2937",
+                marginBottom: 8,
+                borderRadius: 8,
+              }}
+            >
+              <strong>{coin.symbol}</strong> | {coin.signal} | Entry {coin.entryLow} -{" "}
+              {coin.entryHigh} | TP1 {coin.tp1} | RR {coin.rr} | {coin.alertLevel} |{" "}
+              {coin.oiStructure || "-"} | OI Δ {coin.oiDeltaPct ?? "-"}%
+            </div>
+          ))}
+        </div>
+      )}
+
+      {topShorts.length > 0 && (
+        <div style={{ marginTop: 30 }}>
+          <h2 style={{ color: "#ef4444" }}>Top Short Setups</h2>
+          {topShorts.map((coin: any, index: number) => (
+            <div
+              key={index}
+              onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
+              style={{
+                cursor: "pointer",
+                padding: 10,
+                border: "1px solid #1f2937",
+                marginBottom: 8,
+                borderRadius: 8,
+              }}
+            >
+              <strong>{coin.symbol}</strong> | {coin.signal} | Entry {coin.entryLow} -{" "}
+              {coin.entryHigh} | TP1 {coin.tp1} | RR {coin.rr} | {coin.alertLevel} |{" "}
+              {coin.oiStructure || "-"} | OI Δ {coin.oiDeltaPct ?? "-"}%
+            </div>
+          ))}
+        </div>
+      )}
+
+      {indexScanner.length > 0 && (
+        <div style={{ marginTop: 30 }}>
+          <h2>US Markt Übersicht</h2>
+
+          <div style={{ overflowX: "auto" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                marginTop: 10,
+              }}
+            >
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: 8 }}>Symbol</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Name</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Trend</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Signal</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Preis</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>RSI</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Score</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Auto Score</th>
+<th style={{ textAlign: "left", padding: 8 }}>Quality</th>
+<th style={{ textAlign: "left", padding: 8 }}>Bias</th>
+                </tr>
+              </thead>
+              <tbody>
+                {indexScanner.map((item: any, index: number) => (
+                  <tr key={index} style={{ borderTop: "1px solid #333" }}>
+                    <td style={{ padding: 8 }}>{item.symbol}</td>
+                    <td style={{ padding: 8 }}>{item.label}</td>
+                    <td style={{ padding: 8 }}>{item.trend || "-"}</td>
+                    <td style={{ padding: 8 }}>{item.signal || "-"}</td>
+                    <td style={{ padding: 8 }}>{item.lastPrice || "-"}</td>
+                    <td style={{ padding: 8 }}>{item.rsi || "-"}</td>
+                    <td style={{ padding: 8 }}>{item.score || "-"}</td>
+                    <td style={{ padding: 8, color: getScoreColor(item.autoScore ?? 0) }}>
+  {item.autoScore ?? "-"}
+</td>
+
+<td style={{ padding: 8, color: getAlertColor(item.autoQuality ?? "Skip") }}>
+  {item.autoQuality ?? "-"}
+</td>
+
+<td style={{ padding: 8 }}>
+  {item.autoBias ?? "-"}
+</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {scanner.length > 0 && (
+        <div style={{ marginTop: 30 }}>
+          <h2>Scanner Übersicht</h2>
+          <p>
+            <strong>Mode:</strong> {mode}
+          </p>
+          <p>
+            <strong>Markt:</strong> {marketType}
+          </p>
+          <p>
+            <strong>Coins:</strong> {scanner.length}
+          </p>
+          <p>
+            <strong>US Market Bias:</strong> {usMarketBias}
+          </p>
+
+          <div style={{ overflowX: "auto" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                marginTop: 10,
+              }}
+            >
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: 8 }}>Coin</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Signal</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Trend</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Score</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Macro</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Regime</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Futures</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>MTF</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>OI</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>OI Δ%</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Funding Mom</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Whale</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Trap</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Alert</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Entry</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>Stop</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>TP1</th>
+                  <th style={{ textAlign: "left", padding: 8 }}>RR</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {filteredByAssetTab.map((coin: any, index: number) => (
+                  <tr
+                    key={index}
+                    onClick={() => analyzeMarket(coin.symbol, coin.interval, coin.market)}
+                    style={{
+                      cursor: "pointer",
+                      borderTop: "1px solid #333",
+                    }}
+                  >
+                    <td style={{ padding: 8 }}>{coin.symbol}</td>
+                    <td style={{ padding: 8 }}>{coin.signal}</td>
+                    <td style={{ padding: 8 }}>{coin.trend}</td>
+                    <td style={{ padding: 8, color: getScoreColor(coin.score) }}>
+                      {coin.score}
+                      <div style={{ marginTop: 6, fontSize: 13, color: "#d1d5db" }}>
+  Auto Score:{" "}
+  <span style={{ color: getScoreColor(coin.autoScore ?? 0) }}>
+    {coin.autoScore ?? "-"}
+  </span>
+  {" | "}
+  Quality:{" "}
+  <span style={{ color: getAlertColor(coin.autoQuality ?? "Skip") }}>
+    {coin.autoQuality ?? "-"}
+  </span>
+</div>
+
+<div style={{ marginTop: 4, fontSize: 12, color: "#9ca3af" }}>
+  Auto Bias: {coin.autoBias ?? "-"}
+</div>
+                    </td>
+                    <td style={{ padding: 8 }}>{coin.macroAlignment}</td>
+                    <td style={{ padding: 8 }}>{coin.regimeAlignment || "-"}</td>
+                    <td style={{ padding: 8 }}>{coin.futuresAlignment}</td>
+                    <td style={{ padding: 8 }}>{coin.mtfStatus}</td>
+                    <td style={{ padding: 8 }}>{coin.oiStructure || "-"}</td>
+                    <td style={{ padding: 8 }}>{coin.oiDeltaPct ?? "-"}</td>
+                    <td style={{ padding: 8 }}>{coin.oiFundingMomentum || "-"}</td>
+                    <td style={{ padding: 8 }}>{coin.whaleMove || "-"}</td>
+                    <td style={{ padding: 8 }}>{coin.liquidationTrap || "-"}</td>
+                    <td style={{ padding: 8, color: getAlertColor(coin.alertLevel) }}>
+                      {coin.alertLevel}
+                    </td>
+                    <td style={{ padding: 8 }}>
+                      {coin.direction !== "Neutral"
+                        ? `${coin.entryLow} - ${coin.entryHigh}`
+                        : "-"}
+                    </td>
+                    <td style={{ padding: 8 }}>
+                      {coin.direction !== "Neutral" ? coin.stopLoss : "-"}
+                    </td>
+                    <td style={{ padding: 8 }}>
+                      {coin.direction !== "Neutral" ? coin.tp1 : "-"}
+                    </td>
+                    <td style={{ padding: 8 }}>
+                      {coin.direction !== "Neutral" ? coin.rr : "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div
+        ref={chartContainerRef}
+        style={{
+          width: "100%",
+          minHeight: "520px",
+          marginTop: 40,
+          border: "1px solid #222",
+        }}
+      />
+
+      {result && (
+        <>
+          <div style={{ marginTop: 30 }}>
+            <h2>Detailanalyse</h2>
+
+            <div
+              style={{
+                marginTop: 12,
+                marginBottom: 18,
+                padding: 12,
+                border: "1px solid #333",
+                borderRadius: 10,
+              }}
+            >
+              <h3>Live Price Stream</h3>
               <p>
-                <strong>Quality:</strong>{" "}
+                <strong>Status:</strong> {liveStatus}
+              </p>
+              <p>
+                <strong>Live Preis:</strong> {livePrice ?? "-"}
+              </p>
+              <p>
+                <strong>Live Change:</strong>{" "}
                 <span
                   style={{
                     color:
-                      oiDeltaData.quality === "High"
+                      livePriceChange === null
+                        ? "white"
+                        : livePriceChange >= 0
                         ? "#22c55e"
-                        : oiDeltaData.quality === "Medium"
-                        ? "#eab308"
                         : "#ef4444",
                   }}
                 >
-                  {oiDeltaData.quality}
+                  {livePriceChange !== null ? `${livePriceChange}%` : "-"}
+                </span>
+              </p>
+            </div>
+
+            <p>
+              <strong>Symbol:</strong> {result?.symbol ?? symbol}
+            </p>
+            <p>
+              <strong>Intervall:</strong> {result?.interval ?? interval}
+            </p>
+            <p>
+              <strong>Markt:</strong> {result?.market ?? marketType}
+            </p>
+            <p>
+              <strong>Letzter Preis:</strong> {result?.lastPrice ?? livePrice ?? "-"}
+            </p>
+            <p>
+              <strong>Trend:</strong> {result?.trend ?? "-"}
+            </p>
+            <p>
+              <strong>Signal:</strong> {result?.signal ?? "-"}
+            </p>
+            <p>
+              <strong>RSI:</strong> {result?.indicators?.rsi ?? "-"}
+            </p>
+            <p>
+              <strong>EMA20:</strong> {result?.indicators?.ema20 ?? "-"}
+            </p>
+            <p>
+              <strong>EMA50:</strong> {result?.indicators?.ema50 ?? "-"}
+            </p>
+            <p>
+              <strong>Support:</strong> {result?.indicators?.support ?? "-"}
+            </p>
+            <p>
+              <strong>Resistance:</strong> {result?.indicators?.resistance ?? "-"}
+            </p>
+            <p>
+              <strong>Last Update:</strong> {lastUpdated}
+            </p>
+            <p>
+              <strong>Aktuelli Uhrziit:</strong> {nowTime}
+            </p>
+            <p>
+              <strong>Nöchschti Candle in:</strong> {countdown}
+            </p>
+
+            {result.setup && result.setup.direction !== "Neutral" && (
+              <>
+                <p>
+                  <strong>Richtung:</strong> {result.setup.direction}
+                </p>
+                <p>
+                  <strong>Entry Zone:</strong> {result.setup.entryLow} -{" "}
+                  {result.setup.entryHigh}
+                </p>
+                <p>
+                  <strong>Stop Loss:</strong> {result.setup.stopLoss}
+                </p>
+                <p>
+                  <strong>TP1:</strong> {result.setup.tp1}
+                </p>
+                <p>
+                  <strong>TP2:</strong> {result.setup.tp2}
+                </p>
+                <p>
+                  <strong>RR:</strong> {result.setup.rr}
+                </p>
+              </>
+            )}
+
+            {positionData && (
+              <>
+                <h3>Positionsrechner</h3>
+                <p>
+                  <strong>Kontogrösse:</strong> {accountSize}
+                </p>
+                <p>
+                  <strong>Risiko %:</strong> {riskPercent}
+                </p>
+                <p>
+                  <strong>Max Verlust:</strong> {positionData.riskAmount}
+                </p>
+                <p>
+                  <strong>Stop Distanz:</strong> {positionData.stopDistance}
+                </p>
+                <p>
+                  <strong>Positionsgrösse:</strong> {positionData.positionSize}
+                </p>
+                <p>
+                  <strong>Positionswert:</strong> {positionData.positionValue}
+                </p>
+              </>
+            )}
+
+            {futuresData && !futuresData.error && (
+              <div style={{ marginTop: 30 }}>
+                <h3>Futures Daten</h3>
+                <p>
+                  <strong>Mark Price:</strong> {futuresData.markPrice}
+                </p>
+                <p>
+                  <strong>Index Price:</strong> {futuresData.indexPrice}
+                </p>
+                <p>
+                  <strong>Funding Rate:</strong> {futuresData.fundingRate}
+                </p>
+                <p>
+                  <strong>Funding Bias:</strong> {futuresData.fundingBias}
+                </p>
+                <p>
+                  <strong>Open Interest:</strong> {futuresData.openInterest}
+                </p>
+                <p>
+                  <strong>OI Trend:</strong> {futuresData.oiTrend}
+                </p>
+              </div>
+            )}
+
+            {futuresIntel && !futuresIntel.error && (
+              <div style={{ marginTop: 30 }}>
+                <h3>Futures Intel</h3>
+                <p>
+                  <strong>Price vs Index:</strong> {futuresIntel.priceVsIndex}
+                </p>
+                <p>
+                  <strong>Futures Insight:</strong> {futuresIntel.futuresInsight}
+                </p>
+                <p>
+                  <strong>Crowd Bias:</strong> {futuresIntel.crowdBias}
+                </p>
+                <p>
+                  <strong>Squeeze Risk:</strong> {futuresIntel.squeezeRisk}
+                </p>
+                <p>
+                  <strong>Pulse:</strong> {futuresIntel.crowdBias} | {futuresIntel.squeezeRisk}
+                </p>
+              </div>
+            )}
+
+            {oiDeltaData && !oiDeltaData.error && (
+              <div style={{ marginTop: 30 }}>
+                <h3>OI Delta Radar</h3>
+
+                <p>
+                  <strong>Current OI:</strong> {oiDeltaData.currentOpenInterest}
+                </p>
+                <p>
+                  <strong>Previous OI:</strong> {oiDeltaData.previousOpenInterest}
+                </p>
+                <p>
+                  <strong>OI Delta %:</strong> {oiDeltaData.oiDeltaPct}
+                </p>
+                <p>
+                  <strong>OI Momentum:</strong> {oiDeltaData.oiMomentum}
+                </p>
+
+                <p>
+                  <strong>Current Funding:</strong> {oiDeltaData.currentFundingRate}
+                </p>
+                <p>
+                  <strong>Previous Funding:</strong> {oiDeltaData.previousFundingRate}
+                </p>
+                <p>
+                  <strong>Funding Momentum:</strong> {oiDeltaData.fundingMomentum}
+                </p>
+
+                <p>
+                  <strong>Current Close:</strong> {oiDeltaData.currentClose}
+                </p>
+                <p>
+                  <strong>Previous Close:</strong> {oiDeltaData.previousClose}
+                </p>
+                <p>
+                  <strong>Price Delta %:</strong> {oiDeltaData.priceDeltaPct}
+                </p>
+
+                <p>
+                  <strong>Structure:</strong>{" "}
+                  <span
+                    style={{
+                      color:
+                        oiDeltaData.structure === "Trend Confirmed"
+                          ? "#22c55e"
+                          : oiDeltaData.structure === "Short Squeeze Build"
+                          ? "#60a5fa"
+                          : oiDeltaData.structure === "Long Flush"
+                          ? "#ef4444"
+                          : "#eab308",
+                    }}
+                  >
+                    {oiDeltaData.structure}
+                  </span>
+                </p>
+
+                <p>
+                  <strong>Bias:</strong>{" "}
+                  <span
+                    style={{
+                      color:
+                        oiDeltaData.bias?.includes("Bullish")
+                          ? "#22c55e"
+                          : oiDeltaData.bias?.includes("Bearish")
+                          ? "#ef4444"
+                          : "white",
+                    }}
+                  >
+                    {oiDeltaData.bias}
+                  </span>
+                </p>
+
+                <p>
+                  <strong>Quality:</strong>{" "}
+                  <span
+                    style={{
+                      color:
+                        oiDeltaData.quality === "High"
+                          ? "#22c55e"
+                          : oiDeltaData.quality === "Medium"
+                          ? "#eab308"
+                          : "#ef4444",
+                    }}
+                  >
+                    {oiDeltaData.quality}
+                  </span>
+                </p>
+
+                <p>
+                  <strong>Note:</strong> {oiDeltaData.note}
+                </p>
+              </div>
+            )}
+
+            <div style={{ marginTop: 20 }}>
+              <h3>Market Intelligence</h3>
+
+              <p>
+                <strong>Enhanced Score:</strong> {enhancedScore}
+              </p>
+
+              <p>
+                <strong>Market Regime:</strong>{" "}
+                <span style={{ color: getRegimeColor(marketRegime) }}>
+                  {marketRegime}
                 </span>
               </p>
 
-              <p><strong>Note:</strong> {oiDeltaData.note}</p>
+              <p>
+                <strong>Whale Activity:</strong>{" "}
+                {whaleSignal.active ? whaleSignal.strength : "None"}
+              </p>
+
+              <p>
+                <strong>Bias:</strong> {bias}
+              </p>
+
+              <p>
+                <strong>Confidence:</strong> {confidence}
+              </p>
             </div>
-          )}
 
-          <div style={{ marginTop: 20 }}>
-            <h3>Market Intelligence</h3>
+            {mtfData && !mtfData.error && (
+              <div style={{ marginTop: 30 }}>
+                <h3>Multi-Timeframe Matrix</h3>
+                <p>
+                  <strong>MTF Bias:</strong> {mtfData.mtfBias}
+                </p>
+                <p>
+                  <strong>Alignment:</strong> {mtfData.mtfAlignment}
+                </p>
 
-            <p>
-              <strong>Enhanced Score:</strong> {enhancedScore}
-            </p>
+                <div style={{ overflowX: "auto" }}>
+                  <table
+                    style={{
+                      width: "100%",
+                      borderCollapse: "collapse",
+                      marginTop: 10,
+                    }}
+                  >
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: "left", padding: 8 }}>Intervall</th>
+                        <th style={{ textAlign: "left", padding: 8 }}>Trend</th>
+                        <th style={{ textAlign: "left", padding: 8 }}>Signal</th>
+                        <th style={{ textAlign: "left", padding: 8 }}>Preis</th>
+                        <th style={{ textAlign: "left", padding: 8 }}>RSI</th>
+                        <th style={{ textAlign: "left", padding: 8 }}>Score</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mtfData.frames?.map((frame: any, index: number) => (
+                        <tr key={index} style={{ borderTop: "1px solid #333" }}>
+                          <td style={{ padding: 8 }}>{frame.interval}</td>
+                          <td style={{ padding: 8 }}>{frame.trend || "-"}</td>
+                          <td style={{ padding: 8 }}>{frame.signal || "-"}</td>
+                          <td style={{ padding: 8 }}>{frame.lastPrice || "-"}</td>
+                          <td style={{ padding: 8 }}>{frame.rsi || "-"}</td>
+                          <td style={{ padding: 8 }}>{frame.score || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
-            <p>
-              <strong>Market Regime:</strong>{" "}
-              <span style={{ color: getRegimeColor(marketRegime) }}>
-                {marketRegime}
-              </span>
-            </p>
+            {liquidationData && !liquidationData.error && (
+              <div style={{ marginTop: 30 }}>
+                <h3>Liquidation Heatmap (Live Refresh)</h3>
+                <p>
+                  <strong>Liquidity Bias:</strong> {liquidationData.liquidityBias}
+                </p>
 
-            <p>
-              <strong>Whale Activity:</strong>{" "}
-              {whaleSignal.active ? whaleSignal.strength : "None"}
-            </p>
-
-            <p>
-              <strong>Bias:</strong> {bias}
-            </p>
-
-            <p>
-              <strong>Confidence:</strong> {confidence}
-            </p>
-          </div>
-
-          {mtfData && !mtfData.error && (
-            <div style={{ marginTop: 30 }}>
-              <h3>Multi-Timeframe Matrix</h3>
-              <p><strong>MTF Bias:</strong> {mtfData.mtfBias}</p>
-              <p><strong>Alignment:</strong> {mtfData.mtfAlignment}</p>
-
-              <div style={{ overflowX: "auto" }}>
-                <table
+                <div
                   style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    marginTop: 10,
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 16,
+                    marginTop: 12,
                   }}
                 >
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: "left", padding: 8 }}>Intervall</th>
-                      <th style={{ textAlign: "left", padding: 8 }}>Trend</th>
-                      <th style={{ textAlign: "left", padding: 8 }}>Signal</th>
-                      <th style={{ textAlign: "left", padding: 8 }}>Preis</th>
-                      <th style={{ textAlign: "left", padding: 8 }}>RSI</th>
-                      <th style={{ textAlign: "left", padding: 8 }}>Score</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mtfData.frames?.map((frame: any, index: number) => (
-                      <tr key={index} style={{ borderTop: "1px solid #333" }}>
-                        <td style={{ padding: 8 }}>{frame.interval}</td>
-                        <td style={{ padding: 8 }}>{frame.trend || "-"}</td>
-                        <td style={{ padding: 8 }}>{frame.signal || "-"}</td>
-                        <td style={{ padding: 8 }}>{frame.lastPrice || "-"}</td>
-                        <td style={{ padding: 8 }}>{frame.rsi || "-"}</td>
-                        <td style={{ padding: 8 }}>{frame.score || "-"}</td>
-                      </tr>
+                  <div>
+                    <strong>Unter aktuellem Preis</strong>
+                    {liquidationData.heatmap?.below?.map((row: any, index: number) => (
+                      <div
+                        key={index}
+                        style={{
+                          marginTop: 6,
+                          padding: 8,
+                          border: "1px solid #333",
+                          borderRadius: 8,
+                        }}
+                      >
+                        {row.side} | {row.level} | {row.distancePct}% | {row.intensity}
+                      </div>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+                  </div>
 
-          {liquidationData && !liquidationData.error && (
-            <div style={{ marginTop: 30 }}>
-              <h3>Liquidation Heatmap (Live Refresh)</h3>
-              <p><strong>Liquidity Bias:</strong> {liquidationData.liquidityBias}</p>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 16,
-                  marginTop: 12,
-                }}
-              >
-                <div>
-                  <strong>Unter aktuellem Preis</strong>
-                  {liquidationData.heatmap?.below?.map((row: any, index: number) => (
-                    <div
-                      key={index}
-                      style={{
-                        marginTop: 6,
-                        padding: 8,
-                        border: "1px solid #333",
-                        borderRadius: 8,
-                      }}
-                    >
-                      {row.side} | {row.level} | {row.distancePct}% | {row.intensity}
-                    </div>
-                  ))}
-                </div>
-
-                <div>
-                  <strong>Über aktuellem Preis</strong>
-                  {liquidationData.heatmap?.above?.map((row: any, index: number) => (
-                    <div
-                      key={index}
-                      style={{
-                        marginTop: 6,
-                        padding: 8,
-                        border: "1px solid #333",
-                        borderRadius: 8,
-                      }}
-                    >
-                      {row.side} | {row.level} | {row.distancePct}% | {row.intensity}
-                    </div>
-                  ))}
+                  <div>
+                    <strong>Über aktuellem Preis</strong>
+                    {liquidationData.heatmap?.above?.map((row: any, index: number) => (
+                      <div
+                        key={index}
+                        style={{
+                          marginTop: 6,
+                          padding: 8,
+                          border: "1px solid #333",
+                          borderRadius: 8,
+                        }}
+                      >
+                        {row.side} | {row.level} | {row.distancePct}% | {row.intensity}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
-      </>
-    )}
-  </main>
-)
+            )}
+          </div>
+        </>
+      )}
+    </main>
+  )
 }
